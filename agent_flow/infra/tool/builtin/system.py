@@ -343,6 +343,10 @@ def _confirmed(approved: bool, reason: str) -> Event:
     return Event("human.bash.confirmed", payload={"approved": approved, "reason": reason})
 
 
+def _confirmed(approved: bool, reason: str) -> Event:
+    return Event("human.bash.confirmed", payload={"approved": approved, "reason": reason})
+
+
 @on_tool.on(Event("human.bash"))
 async def confirm(**kwargs) -> Event:
     """人机协作中间件对每次 bash 调用都会经过这里。
