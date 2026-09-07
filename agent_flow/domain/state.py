@@ -118,8 +118,6 @@ class Agent_state():
             "last_tool_ok": True,
             "tool_retry":     0,   
             # 控制
-            "plan":{},
-            "current_state":"",
             "session_id":    session_id,
             "retry":         0,
             "is_finished":   False,
