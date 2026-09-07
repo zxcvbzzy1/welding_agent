@@ -31,7 +31,9 @@ def set_bash_settings(danger_policy: str | None = None, auto_confirm: str | None
 BASH = Tool(
     name="bash",
     description="""执行 bash 命令，执行前会审核高危命令和工作路径，返回 stdout、stderr 和退出码。
-    当 `file` 工具（read/write/append/edit/apply_patch/list_dir/glob/search_text 等操作）无法满足需求时，可以使用该工具执行更复杂的文件操作命令。""",
+    当 `file` 工具（read/write/append/edit/apply_patch/list_dir/glob/search_text 等操作）无法满足需求时，可以使用该工具执行更复杂的文件操作命令。
+    注意部署命令不要通过此工具执行，用'deploy'工具
+    """,
     field="system",
     input_schema={
         "type": "object",
@@ -285,7 +287,7 @@ class SystemTool():
             shell=True,         # 使用 shell 解析命令
             env=os.environ,     # 继承环境变量
             cwd=target_dir,
-            timeout=30          # 防止挂死
+            timeout=40          # 防止挂死
         )
         if result.returncode != 0:
             print(f"Command failed with return code {result.returncode}")
@@ -303,20 +305,21 @@ factory._build_and_register_list([BASH], bus)
 
 @on_tool.on(factory.tool("bash").called())
 def exec_bash(**kwargs)->Event:
-    command = kwargs["command"]
-    agent_id = kwargs["agent_id"]
-    work_path = agent_dict[agent_id].work_path
-    tool = SystemTool(working_directory=work_path)
-    respond = tool.exec_bash(command)
-    if respond["returncode"] != 0:
-        tool_respond = Tool_respond(
-                agent_id=agent_id,
-                name="bash",
-                success=False,
-                respond=f"命令执行失败: {respond['stderr']}"
-            )
-        return factory.tool("bash").failed(tool_respond)
-    else:
+    agent_id = kwargs.get("agent_id", "")
+    try:
+        command = kwargs["command"]
+        work_path = agent_dict[agent_id].work_path
+        tool = SystemTool(working_directory=work_path)
+        respond = tool.exec_bash(command)
+        if respond["returncode"] != 0:
+            tool_respond = Tool_respond(
+                    agent_id=agent_id,
+                    name="bash",
+                    success=False,
+                    respond=f"命令执行失败: {respond['stderr']}"
+                )
+            return factory.tool("bash").failed(tool_respond)
+
         # 成功但无 stdout 的命令（mkdir/touch/写文件/cd 等）若回传空字符串，模型看不到结果会重复调用，
         # 这里兜底成明确的成功提示，保证 tool.succeeded 负载非空。
         stdout = respond.get("stdout") or ""
@@ -327,6 +330,14 @@ def exec_bash(**kwargs)->Event:
                 respond=stdout if stdout.strip() else "命令执行成功，无标准输出（returncode=0）"
             )
         return factory.tool("bash").succeeded(tool_respond)
+    except Exception as exc:
+        tool_respond = Tool_respond(
+                agent_id=agent_id,
+                name="bash",
+                success=False,
+                respond=f"命令执行异常: {type(exc).__name__}: {exc}"
+            )
+        return factory.tool("bash").failed(tool_respond)
 
 def _confirmed(approved: bool, reason: str) -> Event:
     return Event("human.bash.confirmed", payload={"approved": approved, "reason": reason})

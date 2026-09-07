@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import mimetypes
 import time
+from pathlib import Path
 from typing import Any
 
 from domain.event import Event
@@ -10,11 +13,16 @@ from infra.config import bus, factory
 from infra.event_bind import On_bind
 
 
+LOCAL_IMAGE_ROOT = Path(__file__).resolve().parents[3] / "temp"
+MAX_LOCAL_IMAGE_BYTES = 10 * 1024 * 1024
+
+
 INLINE_ARTIFACT = Tool(
     name="inline_artifact",
     description=(
         "创建消息内联产物展示，支持普通消息、图片消息、diff 卡片、"
-        "可编辑文档预览和网页预览。当用户命令有产物要求时，调用这个展示产物"
+        "可编辑文档预览和网页预览。图片可通过 image.file_path 读取 agent_flow/temp 内的本地图片。"
+        "当用户命令有产物要求时，调用这个展示产物"
     ),
     field="system",
     input_schema={
@@ -41,6 +49,10 @@ INLINE_ARTIFACT = Tool(
                 "properties": {
                     "title": {"type": "string", "description": "图片标题"},
                     "url": {"type": "string", "description": "图片 URL"},
+                    "file_path": {
+                        "type": "string",
+                        "description": "agent_flow/temp 内的本地 PNG/JPEG/GIF/WebP 图片绝对路径，最大 10 MiB；与 url 二选一",
+                    },
                     "alt": {"type": "string", "description": "图片替代文本"},
                     "mime_type": {"type": "string", "description": "图片 MIME 类型"},
                     "metadata": {"type": "object", "description": "前端渲染附加信息"},
@@ -178,13 +190,34 @@ class InlineArtifactTool:
         }
 
     def _build_image(self, params: dict[str, Any]) -> dict[str, Any]:
+        url = params.get("url", "")
+        mime_type = params.get("mime_type") or "image/*"
+        metadata = dict(params.get("metadata") or {})
+        file_path = params.get("file_path")
+        if file_path:
+            if url:
+                raise ValueError("image.file_path 与 image.url 只能提供一个")
+            path = Path(file_path).expanduser().resolve()
+            if not path.is_relative_to(LOCAL_IMAGE_ROOT.resolve()):
+                raise ValueError("本地图片必须位于 agent_flow/temp 目录内")
+            if not path.is_file():
+                raise ValueError(f"图片文件不存在: {path}")
+            mime_type = mimetypes.guess_type(path.name)[0]
+            if mime_type not in {"image/png", "image/jpeg", "image/gif", "image/webp"}:
+                raise ValueError("本地图片仅支持 PNG/JPEG/GIF/WebP")
+            if path.stat().st_size > MAX_LOCAL_IMAGE_BYTES:
+                raise ValueError("本地图片不能超过 10 MiB")
+            content = path.read_bytes()
+            # 使用 data URL，浏览器无需访问服务器本地路径或启动额外静态服务。
+            url = f"data:{mime_type};base64,{base64.b64encode(content).decode('ascii')}"
+            metadata["file_path"] = str(path)
         return {
             "type": "image",
             "title": params.get("title", ""),
-            "url": params.get("url", ""),
+            "url": url,
             "alt": params.get("alt", ""),
-            "mime_type": params.get("mime_type") or "image/*",
-            "metadata": params.get("metadata") or {},
+            "mime_type": mime_type,
+            "metadata": metadata,
             "editable": False,
         }
 
@@ -248,11 +281,18 @@ async def inline_artifact(**kwargs) -> Event:
         )
         return factory.tool("inline_artifact").failed(tool_respond)
 
+    response_payload = payload
+    if payload["artifact_type"] == "image" and kwargs.get("image", {}).get("file_path"):
+        # 完整图片只走产物事件；工具反馈不把大段 base64 再注入 LLM 上下文。
+        response_payload = {
+            **payload,
+            "artifact": {key: value for key, value in payload["artifact"].items() if key != "url"},
+        }
     tool_respond = Tool_respond(
         agent_id=agent_id,
         name="inline_artifact",
         success=True,
-        respond=payload,
+        respond=response_payload,
     )
     return factory.tool("inline_artifact").succeeded(tool_respond)
 

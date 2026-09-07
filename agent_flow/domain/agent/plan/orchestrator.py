@@ -76,6 +76,7 @@ class PlanOrchestrator:
         }
 
     async def start(self, prompt: str) -> None:
+        # 事件发送+状态同步
         self._dispatch({
             "event_dispatch": "workflow.started",
             "playload": {"prompt": prompt},
@@ -85,6 +86,7 @@ class PlanOrchestrator:
             self.state.to_context_dict(),
             list(self.executors.keys()),
         )
+
         self._dispatch({
             "event_dispatch": "plan.generated",
             "playload": {"plan": plan},
@@ -93,6 +95,7 @@ class PlanOrchestrator:
         await self.execute(plan)
 
         final = await self.planner.summarize_result(self.state.to_context_dict())
+
         self._dispatch({
             "event_dispatch": "workflow.finished",
             "playload": {
