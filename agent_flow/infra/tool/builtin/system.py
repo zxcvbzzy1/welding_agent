@@ -341,6 +341,14 @@ async def exec_bash(**kwargs)->Event:
                 respond=stdout if stdout.strip() else "命令执行成功，无标准输出（returncode=0）"
             )
         return factory.tool("bash").succeeded(tool_respond)
+    except Exception as exc:
+        tool_respond = Tool_respond(
+                agent_id=agent_id,
+                name="bash",
+                success=False,
+                respond=f"命令执行异常: {type(exc).__name__}: {exc}"
+            )
+        return factory.tool("bash").failed(tool_respond)
 
 def _confirmed(approved: bool, reason: str) -> Event:
     return Event("human.bash.confirmed", payload={"approved": approved, "reason": reason})
