@@ -824,7 +824,7 @@ function downloadArtifact() {
   margin: 0;
 }
 .artifact-image {
-  max-width: 100%;
+  max-width: 50%;
   border-radius: 8px;
   display: block;
 }
@@ -1020,5 +1020,11 @@ function downloadArtifact() {
   font-size: 13px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.artifact-body.artifact-image-body{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 </style>
