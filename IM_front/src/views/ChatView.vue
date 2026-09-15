@@ -1721,7 +1721,7 @@ onUnmounted(() => {
           </a-button>
         </a-tooltip>
       </div>
-      <header class="chat-hero" @click="drawerOpen = true">
+      <header class="chat-hero" @click="drawerOpen = true" :hidden="sidebarCollapsed">
         <div class="hero-title">
           <a-avatar :size="44" :src="heroAvatar">
             <TeamOutlined v-if="im.currentRoom?.type === 'group'" />
@@ -1754,7 +1754,7 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <div class="chat-body">
+      <div class="chat-body" style="padding-bottom: 200px;">
       <div ref="listRef" class="message-list" @scroll.passive="handleListScroll">
         <div v-if="im.loadingOlderMessages" class="history-loading">
           <LoadingOutlined spin />
@@ -1974,7 +1974,8 @@ onUnmounted(() => {
               <ArtifactCard :artifact="entry.artifact" @selection-edit="onArtifactSelectionEdit" @expand="expandArtifact" />
             </div>
           </article>
-
+          
+<!-- 
           <article v-else class="message-row event-row">
             <a-avatar class="message-avatar" :src="eventAvatar(entry.event)">{{ avatarText(eventActor(entry.event, agentName)) }}</a-avatar>
             <div class="message-bubble event-bubble" :class="eventTone(entry.event.name)">
@@ -2020,7 +2021,7 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
-          </article>
+          </article> -->
         </template>
       </div>
 
