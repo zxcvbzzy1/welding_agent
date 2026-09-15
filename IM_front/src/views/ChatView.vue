@@ -1807,7 +1807,8 @@ onUnmounted(() => {
               <ArtifactCard :artifact="entry.artifact" @selection-edit="onArtifactSelectionEdit" @expand="expandArtifact" />
             </div>
           </article>
-
+          
+<!-- 
           <article v-else class="message-row event-row">
             <a-avatar class="message-avatar" :src="eventAvatar(entry.event)">{{ avatarText(eventActor(entry.event, agentName)) }}</a-avatar>
             <div class="message-bubble event-bubble" :class="eventTone(entry.event.name)">
@@ -1853,7 +1854,7 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
-          </article>
+          </article> -->
         </template>
         <div class="message-bottom-space" aria-hidden="true"></div>
       </div>
