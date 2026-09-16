@@ -36,8 +36,8 @@ from infra.db.mongodb import DocumentStore
 
 
 class ContextService:
-    DEFAULT_FIELDS = ["system", "search", "memory", "write_agent", "human"]
-    PROTECTED_CONTEXT_IDS = {"default_executor", "default_planner", "default_step"}
+    DEFAULT_FIELDS = ["system", "search", "memory", "write_agent", "human","robot"]
+    PROTECTED_CONTEXT_IDS = {"default_executor", "default_planner", "default_step", "default_coding"}
 
     def __init__(self, store: DocumentStore) -> None:
         self._store = store
