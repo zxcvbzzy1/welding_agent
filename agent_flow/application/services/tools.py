@@ -29,6 +29,7 @@ class ToolRegistryService:
         import infra.tool.builtin.file_tools  # noqa: F401
         import infra.tool.builtin.diff_editor  # noqa: F401
         import infra.tool.builtin.skill  # noqa: F401
+        import infra.tool.builtin.robot  # noqa: F401
         import infra.tool.builtin.cad_welding_path  # noqa: F401
         import infra.tool.tools_attach_methods  # noqa: F401
         # 加载技能文件并把检索器注册到 runtime_hooks（系统召回 + recall_skill 工具共用）。
@@ -38,7 +39,7 @@ class ToolRegistryService:
         bootstrap_skills()
 
     def _apply_persisted_runtime_config(self) -> None:
-        """启动时把 tools 集合里持久化的运行时配置应用到进程内（目前仅 bash 危险命令策略）。
+        """启动时把 tools 集合里持久化的运行时配置应用到进程内。
 
         config 存在 tools 记录的独立 `config` 字段，不会被 _persist_registered_tools 的 $set 覆盖。
         """
@@ -54,6 +55,19 @@ class ToolRegistryService:
                 )
         except Exception:
             # 配置加载失败不应阻断工具注册；退回默认策略（reject）
+            pass
+
+        try:
+            from infra.tool.builtin import robot
+
+            for tool_id in ("robot_move_to", "robot_move_by"):
+                record = self._store.find_one("tools", {"tool_id": tool_id}) or {}
+                cfg = record.get("config") or {}
+                if cfg:
+                    robot.set_robot_settings(auto_confirm=cfg.get("auto_confirm"))
+                    break
+        except Exception:
+            # 配置加载失败不应阻断工具注册；退回默认策略（ask）
             pass
 
     def list_tools(self) -> list[dict[str, Any]]:

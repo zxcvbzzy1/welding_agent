@@ -8,6 +8,7 @@ from im_backend.application.services.messaging.agents import IMAgentService
 from im_backend.infra.agent_flow_bridge.pathing import ensure_agent_flow_path
 
 ensure_agent_flow_path()
+from infra.tool.builtin import robot as robot_tool  # type: ignore  # noqa: E402
 from infra.tool.builtin import system as bash_tool  # type: ignore  # noqa: E402
 
 
@@ -50,10 +51,10 @@ async def patch_tool_config(
     current_user: dict = Depends(get_current_user),
     service: IMAgentService = Depends(get_agent_catalog),
 ):
-    """更新工具的运行时参数配置（目前仅 bash 的危险命令策略生效）。
+    """更新工具的运行时参数配置。
 
     config 存到 tools 集合的独立 `config` 字段（不放 metadata，避免被启动时的工具登记覆盖），
-    并对 bash 进程内即时生效（im_backend 与 agent_flow 同进程）。
+    并对支持运行时配置的内置工具进程内即时生效（im_backend 与 agent_flow 同进程）。
     """
     _ = current_user
     if _find_tool(service, tool_name) is None:
@@ -79,11 +80,13 @@ async def patch_tool_config(
     merged = {**(record.get("config") or {}), **incoming}
     store.update_one("tools", {"tool_id": tool_name}, {"config": merged}, upsert=True)
 
-    # 仅 bash 有运行时行为；进程内即时生效，无需重启
+    # 支持运行时配置的内置工具进程内即时生效，无需重启。
     if tool_name == "bash":
         bash_tool.set_bash_settings(
             danger_policy=merged.get("danger_policy"),
             auto_confirm=merged.get("auto_confirm"),
         )
+    if tool_name in {"robot_move_to", "robot_move_by"}:
+        robot_tool.set_robot_settings(auto_confirm=merged.get("auto_confirm"))
 
     return {"item": {"name": tool_name, "config": merged}}
