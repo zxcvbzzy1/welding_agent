@@ -183,6 +183,7 @@ const toolFieldLabels = {
   search: '搜索',
   memory: '记忆',
   human: '人工协作',
+  robot: '机器人',
   write_agent: '编写 Agent',
   other: '其它',
 }
@@ -1008,6 +1009,25 @@ function clearSelectionEditTarget() {
 // —— 危险命令人工确认（弹窗）——
 const pendingConfirmation = computed(() => im.humanConfirmations.find(item => item.kind !== 'question') || null)
 const resolvingConfirmation = ref(false)
+
+const pendingConfirmationTitle = computed(() => {
+  const toolName = pendingConfirmation.value?.tool_name
+  return toolName ? `工具调用需要确认 · ${toolName}` : '工具调用需要确认'
+})
+
+const pendingConfirmationSummary = computed(() => {
+  const c = pendingConfirmation.value
+  if (!c) return ''
+  if (c.tool_name === 'bash') return 'Agent 请求执行一条高危命令，确认后才会执行：'
+  return 'Agent 请求执行以下工具调用，确认后才会执行：'
+})
+
+function formatConfirmationArguments(confirmation) {
+  const args = confirmation?.arguments || {}
+  if (confirmation?.tool_name === 'bash' && args.command) return args.command
+  return JSON.stringify(args, null, 2)
+}
+
 async function resolveDangerCommand(approved) {
   const c = pendingConfirmation.value
   if (!c || resolvingConfirmation.value) return
@@ -2276,20 +2296,18 @@ onUnmounted(() => {
       </section>
     </a-drawer>
 
-    <!-- 危险命令人工确认 -->
+    <!-- 工具调用人工确认 -->
     <a-modal
       :open="Boolean(pendingConfirmation)"
-      title="危险命令需要确认"
+      :title="pendingConfirmationTitle"
       :closable="false"
       :mask-closable="false"
       :footer="null"
       :width="560"
     >
       <template v-if="pendingConfirmation">
-        <p class="danger-confirm-tip">
-          Agent 请求执行一条高危命令，确认后才会执行：
-        </p>
-        <pre class="danger-confirm-cmd">{{ pendingConfirmation.arguments?.command }}</pre>
+        <p class="danger-confirm-tip">{{ pendingConfirmationSummary }}</p>
+        <pre class="danger-confirm-cmd">{{ formatConfirmationArguments(pendingConfirmation) }}</pre>
         <div class="danger-confirm-actions">
           <a-button :loading="resolvingConfirmation" @click="resolveDangerCommand(false)">拒绝</a-button>
           <a-button type="primary" danger :loading="resolvingConfirmation" @click="resolveDangerCommand(true)">
