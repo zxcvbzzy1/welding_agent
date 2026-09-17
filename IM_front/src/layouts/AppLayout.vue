@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { LogoutOutlined, MessageOutlined, BookOutlined, ToolOutlined } from '@ant-design/icons-vue'
+import { BookOutlined, LogoutOutlined, MessageOutlined, ToolOutlined, VideoCameraOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useIMStore } from '@/stores/im'
 
@@ -75,6 +75,10 @@ onUnmounted(() => {
           >
             <ToolOutlined class="pill-icon" />
             <span>工具</span>
+          </RouterLink>
+          <RouterLink :to="{ name: 'camera' }" class="topbar-pill-seg" :class="{ 'topbar-pill-seg--active': activeNav === 'camera' }">
+            <VideoCameraOutlined class="pill-icon" />
+            <span>相机</span>
           </RouterLink>
         </div>
       </nav>
@@ -274,6 +278,7 @@ onUnmounted(() => {
   .topbar-pill-seg {
     flex: 1 1 0;
     min-width: 0;
+    padding-inline: 10px;
   }
 
   .topbar-user-area {

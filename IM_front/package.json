@@ -10,12 +10,15 @@
   },
   "dependencies": {
     "@ant-design/icons-vue": "^7.0.1",
+    "@loaders.gl/core": "^4.4.5",
+    "@loaders.gl/ply": "^4.5.1",
     "ant-design-vue": "^4.2.6",
     "axios": "^1.16.1",
     "dompurify": "^3.4.8",
     "highlight.js": "^11.11.1",
     "markdown-it": "^14.2.0",
     "pinia": "^3.0.4",
+    "three": "^0.186.0",
     "vue": "^3.5.32",
     "vue-router": "^5.0.4"
   },
