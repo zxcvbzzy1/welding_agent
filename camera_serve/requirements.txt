@@ -1,0 +1,8 @@
+MechEyeAPI>=2.6,<3
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+aiortc>=1.10,<2
+av>=13,<18
+opencv-python>=4.8,<6
+numpy>=1.26,<3
+
