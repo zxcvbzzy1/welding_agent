@@ -183,6 +183,7 @@ const toolFieldLabels = {
   memory: '记忆',
   human: '人工协作',
   robot: '机器人',
+  camera: '相机',
   write_agent: '编写 Agent',
   other: '其它',
 }
@@ -193,6 +194,7 @@ const artifactTypeLabels = {
   document: '文档',
   web: '网页',
   deploy: '部署',
+  point_cloud: '点云',
 }
 const dispatchOptions = reactive({
   auto_start: true,
@@ -203,7 +205,7 @@ const dispatchOptions = reactive({
 const showToolPicker = computed(() => agentForm.agent_type === 'executor')
 
 const groupedTools = computed(() => {
-  const order = ['system', 'search', 'memory', 'human', 'robot', 'other']
+  const order = ['system', 'search', 'memory', 'human', 'robot', 'camera', 'other']
   const buckets = {}
   for (const tool of im.tools || []) {
     const field = tool.field || 'other'

@@ -82,7 +82,7 @@ async function saveConfig() {
 }
 
 const fieldColor = (field) =>
-  ({ system: 'blue', search: 'green', memory: 'purple', human: 'orange', robot: 'magenta' }[field] || 'default')
+  ({ system: 'blue', search: 'green', memory: 'purple', human: 'orange', robot: 'magenta', camera: 'cyan' }[field] || 'default')
 </script>
 
 <template>
