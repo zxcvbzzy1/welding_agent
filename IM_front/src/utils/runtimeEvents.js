@@ -49,8 +49,14 @@ export function isArtifactEvent(event) {
 // 以「类型 + 标题/路径/URL + 正文指纹」作为产物身份，用于在 run 汇总里去重。
 export function artifactIdentity(artifact = {}) {
   const type = (artifact.type || 'message').toLowerCase()
+  // 资源型产物可能被自动工具和 Agent 手工展示两次，标题虽不同但 URL 指向同一文件。
+  // URL 必须优先于标题参与身份计算，才能在实时事件与最终消息之间稳定去重。
+  const url = String(artifact.url || '').trim()
+  if (url) return `${type}|url|${url}`
+  const filePath = String(artifact.file_path || artifact.metadata?.file_path || '').trim()
+  if (filePath) return `${type}|file|${filePath}`
   const label = artifact.title || artifact.preview_title || artifact.file_path || artifact.url || ''
-  const body = artifact.content || artifact.after || artifact.html || artifact.alt || artifact.url || ''
+  const body = artifact.content || artifact.after || artifact.html || artifact.alt || ''
   return `${type}|${label}|${body.length}|${body.slice(0, 160)}`
 }
 
@@ -436,6 +442,16 @@ export function buildGroupTimelineItems({ messages = [], events = [] }) {
     })
   }
 
+  function unpersistedRunArtifacts(scope) {
+    const persistedIdentities = persistedArtifactIdentitiesByScope.get(scope)
+    return (artifactsByScope.get(scope) || []).filter((item) => {
+      const eventId = item.event?.event_id
+      if (eventId && persistedArtifactEventIds.has(eventId)) return false
+      const identity = artifactIdentity(item.artifact)
+      return !identity || !persistedIdentities?.has(identity)
+    })
+  }
+
   function createEventItem(event) {
     const item = {
       key: `event-${event.event_id || `${event.name}-${event.created_at}`}`,
@@ -444,21 +460,33 @@ export function buildGroupTimelineItems({ messages = [], events = [] }) {
       event,
     }
     if (event.name === 'planner.final') {
-      item.run_artifacts = artifactsByScope.get(eventRunScope(event)) || []
+      item.run_artifacts = unpersistedRunArtifacts(eventRunScope(event))
     }
     return item
   }
 
   for (const event of sortedEvents) {
     if (isArtifactEvent(event)) {
-      items.push({
-        key: `artifact-${event.event_id || `${event.name}-${event.created_at}`}`,
-        kind: 'artifact',
-        created_at: event.created_at || 0,
-        event,
-        actor_id: eventActorId(event),
-        artifact: event.payload?.artifact || {},
-      })
+      const artifact = event.payload?.artifact || {}
+      const scope = eventRunScope(event)
+      const identity = artifactIdentity(artifact)
+      const persistedInFinalMessage = (
+        (event.event_id && persistedArtifactEventIds.has(event.event_id))
+        || (identity && persistedArtifactIdentitiesByScope.get(scope)?.has(identity))
+      )
+      const latestArtifact = !identity || (artifactsByScope.get(scope) || []).some(
+        (item) => item.event === event,
+      )
+      if (!persistedInFinalMessage && latestArtifact) {
+        items.push({
+          key: `artifact-${event.event_id || `${event.name}-${event.created_at}`}`,
+          kind: 'artifact',
+          created_at: event.created_at || 0,
+          event,
+          actor_id: eventActorId(event),
+          artifact,
+        })
+      }
       consumedEventIds.add(event.event_id)
       continue
     }
@@ -542,7 +570,7 @@ export function buildGroupTimelineItems({ messages = [], events = [] }) {
       message,
     }
     if (message?.metadata?.source === 'planner_final' && message.run_id) {
-      item.run_artifacts = artifactsByScope.get(message.run_id) || []
+      item.run_artifacts = unpersistedRunArtifacts(message.run_id)
     }
     return item
   })
