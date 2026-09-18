@@ -47,7 +47,7 @@ Executor 支持在创建和编辑时切换 LLM/VLM；VLM 使用 `deepseek-flash`
 从仓库根目录执行：
 
 ```bash
-IM_SSE_COOKIE_SECURE=false python -m uvicorn im_backend.api.index:app --host 127.0.0.1 --port 8010
+IM_SSE_COOKIE_SECURE=false python -m uvicorn im_backend.api.index:app --host 0.0.0.0 --port 8010
 ```
 
 健康检查：
