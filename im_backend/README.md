@@ -68,3 +68,12 @@ Claude Code / Codex agent 第一版默认需要人工确认；未确认前只生
 /Users/zxcvbzzy1/miniconda3/envs/MY_env/bin/python -m pytest im_backend/checks/file_upload_test.py im_backend/tests/test_prompting.py -v
 npm --prefix IM_front run build
 ```
+
+
+<!-- 重复原因不是 artifacts.py 重复发布，而是前端同时渲染了：
+- 实时 artifacts.* 事件卡片。
+- 最终消息 content_parts 中持久化的同一张卡片。
+现在 [runtimeEvents.js](/home/ByteDance_AgentHub/IM_front/src/utils/runtimeEvents.js) 会通过 artifact_source.event_id，并以同一 run 内的产物特征作为兜底去重：
+- 运行过程中仍实时显示卡片。
+- 最终消息落库后，只保留消息内的正式卡片。
+- 同时移除重复的 run 产物摘要和打包下载项。 -->

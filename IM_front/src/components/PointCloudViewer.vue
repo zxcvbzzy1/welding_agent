@@ -7,7 +7,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { AimOutlined } from '@ant-design/icons-vue'
 
-const MAX_PREVIEW_POINTS = 100000
+const DEFAULT_MAX_PREVIEW_POINTS = 100000
 
 const props = defineProps({
   sourceUrl: { type: String, default: '' },
@@ -21,6 +21,7 @@ const errorText = ref('')
 const originalPointCount = ref(0)
 const renderedPointCount = ref(0)
 const pointSize = ref(1.5)
+const maxRenderPoints = ref(DEFAULT_MAX_PREVIEW_POINTS)
 
 let renderer = null
 let scene = null
@@ -33,6 +34,8 @@ let grid = null
 let axes = null
 let activeRequest = 0
 let abortController = null
+let sourcePositions = null
+let sourceColors = null
 
 const countLabel = computed(() => {
   if (!originalPointCount.value) return ''
@@ -58,7 +61,7 @@ function animate() {
   if (renderer && scene && camera) renderer.render(scene, camera)
 }
 
-function clearCloud() {
+function clearRenderedCloud() {
   if (points) {
     scene?.remove(points)
     points.geometry.dispose()
@@ -77,8 +80,14 @@ function clearCloud() {
     axes.material.dispose()
     axes = null
   }
-  originalPointCount.value = 0
   renderedPointCount.value = 0
+}
+
+function clearCloud() {
+  clearRenderedCloud()
+  sourcePositions = null
+  sourceColors = null
+  originalPointCount.value = 0
 }
 
 function initializeScene() {
@@ -103,17 +112,17 @@ function initializeScene() {
   animate()
 }
 
-function sampleAttribute(source, itemSize, stride, previewCount) {
+function sampleAttribute(source, itemSize, previewCount) {
   const ResultType = source.constructor
   const sampled = new ResultType(previewCount * itemSize)
-  let targetIndex = 0
-  for (let sourceIndex = 0; sourceIndex < source.length / itemSize; sourceIndex += stride) {
+  const sourceCount = Math.floor(source.length / itemSize)
+  for (let targetIndex = 0; targetIndex < previewCount; targetIndex += 1) {
+    const sourceIndex = Math.floor((targetIndex * sourceCount) / previewCount)
     for (let offset = 0; offset < itemSize; offset += 1) {
       sampled[targetIndex * itemSize + offset] = source[sourceIndex * itemSize + offset]
     }
-    targetIndex += 1
   }
-  return targetIndex === previewCount ? sampled : sampled.slice(0, targetIndex * itemSize)
+  return sampled
 }
 
 function fitView() {
@@ -145,6 +154,59 @@ function addHelpers(radius) {
 
 function updatePointSize() {
   if (points) points.material.size = Number(pointSize.value)
+}
+
+function renderCloud() {
+  if (!sourcePositions?.length || !scene) return
+  clearRenderedCloud()
+
+  const total = Math.floor(sourcePositions.length / 3)
+  const limit = Math.max(1, Math.trunc(Number(maxRenderPoints.value) || DEFAULT_MAX_PREVIEW_POINTS))
+  maxRenderPoints.value = limit
+  const previewCount = Math.min(total, limit)
+  // geometry.center() 会原地修改 position attribute；完整渲染时也必须复制，避免后续调节上限重复偏移。
+  const previewPositions = previewCount === total
+    ? sourcePositions.slice()
+    : sampleAttribute(sourcePositions, 3, previewCount)
+  const previewColors = sourceColors?.length >= total * 3
+    ? (previewCount === total ? sourceColors : sampleAttribute(sourceColors, 3, previewCount))
+    : null
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(previewPositions, 3))
+  if (previewColors) {
+    const normalized = previewColors instanceof Uint8Array || previewColors instanceof Uint8ClampedArray
+    geometry.setAttribute('color', new THREE.BufferAttribute(previewColors, 3, normalized))
+  }
+  geometry.center()
+  geometry.computeBoundingSphere()
+
+  const material = new THREE.PointsMaterial({
+    color: previewColors ? 0xffffff : 0x74b9ff,
+    size: Number(pointSize.value),
+    sizeAttenuation: false,
+    vertexColors: Boolean(previewColors),
+  })
+  points = new THREE.Points(geometry, material)
+  scene.add(points)
+  addHelpers(geometry.boundingSphere?.radius || 1)
+
+  originalPointCount.value = total
+  renderedPointCount.value = previewPositions.length / 3
+  fitView()
+  emit('loaded', {
+    original: total,
+    rendered: renderedPointCount.value,
+    max: limit,
+  })
+}
+
+function updateMaxRenderPoints() {
+  const value = Math.trunc(Number(maxRenderPoints.value))
+  maxRenderPoints.value = Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_MAX_PREVIEW_POINTS
+  if (status.value === 'ready') renderCloud()
 }
 
 async function loadCloud() {
@@ -187,39 +249,11 @@ async function loadCloud() {
     if (!positions?.length) throw new Error('PLY 文件中没有可显示的点坐标')
     const colors = mesh?.attributes?.COLOR_0?.value
     const total = Math.floor(positions.length / 3)
-    const stride = Math.max(1, Math.ceil(total / MAX_PREVIEW_POINTS))
-    const previewCount = Math.ceil(total / stride)
-    const previewPositions = stride === 1
-      ? positions
-      : sampleAttribute(positions, 3, stride, previewCount)
-    const previewColors = colors?.length >= total * 3
-      ? (stride === 1 ? colors : sampleAttribute(colors, 3, stride, previewCount))
-      : null
-
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.BufferAttribute(previewPositions, 3))
-    if (previewColors) {
-      const normalized = previewColors instanceof Uint8Array || previewColors instanceof Uint8ClampedArray
-      geometry.setAttribute('color', new THREE.BufferAttribute(previewColors, 3, normalized))
-    }
-    geometry.center()
-    geometry.computeBoundingSphere()
-
-    const material = new THREE.PointsMaterial({
-      color: previewColors ? 0xffffff : 0x74b9ff,
-      size: Number(pointSize.value),
-      sizeAttenuation: false,
-      vertexColors: Boolean(previewColors),
-    })
-    points = new THREE.Points(geometry, material)
-    scene.add(points)
-    addHelpers(geometry.boundingSphere?.radius || 1)
-
+    sourcePositions = positions
+    sourceColors = colors?.length >= total * 3 ? colors : null
     originalPointCount.value = total
-    renderedPointCount.value = previewPositions.length / 3
     status.value = 'ready'
-    fitView()
-    emit('loaded', { original: total, rendered: renderedPointCount.value })
+    renderCloud()
   } catch (reason) {
     if (reason?.name === 'AbortError' || requestId !== activeRequest) return
     status.value = 'error'
@@ -275,6 +309,17 @@ onBeforeUnmount(() => {
     <div v-if="status === 'ready'" class="viewer-toolbar">
       <span class="viewer-label" :title="sourceLabel">{{ sourceLabel || '点云预览' }}</span>
       <span class="viewer-count">{{ countLabel }}</span>
+      <label class="max-points-control">
+        最大渲染
+        <input
+          v-model.number="maxRenderPoints"
+          type="number"
+          min="1"
+          step="10000"
+          @change="updateMaxRenderPoints"
+          @keyup.enter="updateMaxRenderPoints"
+        />
+      </label>
       <label class="point-size-control">
         点大小
         <input v-model="pointSize" type="range" min="1" max="5" step="0.25" @input="updatePointSize" />
@@ -375,6 +420,35 @@ onBeforeUnmount(() => {
   color: #afc0da;
   font-size: 11px;
   white-space: nowrap;
+}
+
+.max-points-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: #afc0da;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.max-points-control input {
+  width: 88px;
+  padding: 3px 6px;
+  color: #e9f1ff;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(151, 179, 222, 0.32);
+  border-radius: 6px;
+  outline: none;
+}
+
+.max-points-control input:focus {
+  border-color: #5a9cff;
+}
+
+.max-points-control + .point-size-control {
+  margin-left: 0;
 }
 
 .point-size-control input {

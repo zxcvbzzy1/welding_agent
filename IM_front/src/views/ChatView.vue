@@ -35,6 +35,7 @@ import {
   UserAddOutlined,
 } from '@ant-design/icons-vue'
 import {
+  artifactIdentity,
   buildConversationTraces,
   buildGroupTimelineItems,
   compactLlmEvents,
@@ -989,6 +990,17 @@ function messagePlainText(item) {
     .trim()
 }
 
+function displayContentParts(item) {
+  const seenArtifacts = new Set()
+  return (item?.content_parts || []).filter((part) => {
+    if (part?.type !== 'artifact') return true
+    const identity = artifactIdentity(part.metadata?.artifact || part)
+    if (identity && seenArtifacts.has(identity)) return false
+    if (identity) seenArtifacts.add(identity)
+    return true
+  })
+}
+
 function messageById(messageId) {
   if (!messageId) return null
   return im.messages.find((item) => item.message_id === messageId) || null
@@ -1271,12 +1283,20 @@ function sanitizeFilename(name) {
 
 function collectMessageArtifacts(entry) {
   const out = []
+  const seen = new Set()
+  const append = (artifact) => {
+    if (!artifact) return
+    const identity = artifactIdentity(artifact)
+    if (identity && seen.has(identity)) return
+    if (identity) seen.add(identity)
+    out.push(artifact)
+  }
   const parts = entry?.message?.content_parts || []
   for (const part of parts) {
-    if (part.type === 'artifact') out.push(part.metadata?.artifact || part)
+    if (part.type === 'artifact') append(part.metadata?.artifact || part)
   }
   for (const item of entry?.run_artifacts || []) {
-    if (item?.artifact) out.push(item.artifact)
+    append(item?.artifact)
   }
   return out
 }
@@ -1854,7 +1874,7 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <div v-for="(part, index) in entry.message.content_parts" :key="`${entry.message.message_id}-${index}`" class="part">
+              <div v-for="(part, index) in displayContentParts(entry.message)" :key="`${entry.message.message_id}-${index}`" class="part">
                 <!-- eslint-disable-next-line vue/no-v-html -->
                 <div v-if="part.type === 'text'" class="text-part md-body" v-html="renderMarkdown(part.text)"></div>
                 <pre v-else-if="part.type === 'code'" class="code-part"><code>{{ part.text }}</code></pre>
@@ -2141,7 +2161,7 @@ onUnmounted(() => {
         </div>
         <div class="preview-body">
           <div
-            v-for="(part, index) in previewMessage.content_parts"
+            v-for="(part, index) in displayContentParts(previewMessage)"
             :key="`preview-${previewMessage.message_id}-${index}`"
             class="part"
           >

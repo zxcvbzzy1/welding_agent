@@ -43,7 +43,7 @@ CAMERA_CAPTURE_2D = Tool(
     name="camera_capture_2d",
     description=(
         "通过相机微服务采集一张 2D 图像。若相机尚未连接，工具会自动发现并连接相机；"
-        "采集成功后返回文件地址并在消息中展示图片卡片。"
+        "采集成功后返回文件地址并在消息中自动展示图片卡片，不并重复调用‘inline_artifact’工具。"
     ),
     field="camera",
     input_schema=_empty_input_schema(),
