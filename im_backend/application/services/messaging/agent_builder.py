@@ -31,6 +31,7 @@ _TOOL_FIELD_LABELS = {
     "search": "搜索",
     "memory": "记忆",
     "human": "人工协作",
+    "camera": "相机",
     "write_agent": "编写 Agent",
     "other": "其它",
 }

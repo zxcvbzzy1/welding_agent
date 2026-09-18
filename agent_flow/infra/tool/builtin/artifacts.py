@@ -21,7 +21,7 @@ INLINE_ARTIFACT = Tool(
     name="inline_artifact",
     description=(
         "创建消息内联产物展示，支持普通消息、图片消息、diff 卡片、"
-        "可编辑文档预览和网页预览。图片可通过 image.file_path 读取 agent_flow/temp 内的本地图片。"
+        "可编辑文档预览、网页预览和点云预览。图片可通过 image.file_path 读取 agent_flow/temp 内的本地图片。"
         "当用户命令有产物要求时，调用这个展示产物"
     ),
     field="system",
@@ -30,7 +30,7 @@ INLINE_ARTIFACT = Tool(
         "properties": {
             "artifact_type": {
                 "type": "string",
-                "enum": ["message", "image", "diff", "document", "web"],
+                "enum": ["message", "image", "diff", "document", "web", "point_cloud"],
                 "description": "产物类型",
             },
             "message": {
@@ -100,6 +100,18 @@ INLINE_ARTIFACT = Tool(
                     "metadata": {"type": "object", "description": "前端渲染附加信息"},
                 },
             },
+            "point_cloud": {
+                "type": "object",
+                "description": "PLY 点云预览产物参数",
+                "properties": {
+                    "title": {"type": "string", "description": "点云标题"},
+                    "url": {"type": "string", "description": "PLY 文件 URL"},
+                    "source_label": {"type": "string", "description": "预览器显示的文件名"},
+                    "mime_type": {"type": "string", "description": "点云文件 MIME 类型"},
+                    "point_count": {"type": "integer", "description": "保存的点数量"},
+                    "metadata": {"type": "object", "description": "前端渲染附加信息"},
+                },
+            },
         },
         "required": ["artifact_type"],
     },
@@ -107,7 +119,7 @@ INLINE_ARTIFACT = Tool(
 
 
 class InlineArtifactTool:
-    VALID_TYPES = {"message", "image", "diff", "document", "web"}
+    VALID_TYPES = {"message", "image", "diff", "document", "web", "point_cloud"}
     MIME_BY_FORMAT = {
         "md": "text/markdown",
         "markdown": "text/markdown",
@@ -170,6 +182,7 @@ class InlineArtifactTool:
             "diff": self._build_diff,
             "document": self._build_document,
             "web": self._build_web,
+            "point_cloud": self._build_point_cloud,
         }
         return builders[artifact_type](self._require_section(arguments, artifact_type))
 
@@ -256,6 +269,18 @@ class InlineArtifactTool:
             "html": params.get("html", ""),
             "preview_title": params.get("preview_title", ""),
             "mime_type": "text/html",
+            "metadata": params.get("metadata") or {},
+            "editable": False,
+        }
+
+    def _build_point_cloud(self, params: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "point_cloud",
+            "title": params.get("title", ""),
+            "url": params.get("url", ""),
+            "source_label": params.get("source_label", ""),
+            "mime_type": params.get("mime_type") or "application/octet-stream",
+            "point_count": int(params.get("point_count") or 0),
             "metadata": params.get("metadata") or {},
             "editable": False,
         }

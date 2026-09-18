@@ -38,7 +38,7 @@ providers = [
     UserPromptProvider(),
     StateProvider(),
     ErrorProvider(memory),
-    AvailableToolsProvider(["system", "search", "memory", "write_agent"]),
+    AvailableToolsProvider(["system", "search", "memory", "write_agent", "camera"]),
     HistoryProvider(memory, "agent_history", FullHistoryStrategy()),
     ReActToolFeedbackProvider(memory, "tool_respond", FullHistoryStrategy() | RecencyStrategy(10) | ChunkToFileStrategy("./mid",4000,4000)),
 ]

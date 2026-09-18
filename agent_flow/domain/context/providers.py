@@ -135,7 +135,7 @@ ARTIFACT_END = "@@ARTIFACT_END@@"
 
 ARTIFACT_PROTOCOL_INSTRUCTION = (
     "## 内联产物协议\n"
-    "当你需要向用户展示一个“产物”（代码改动对比、可预览文档/文件、图片、网页预览，"
+    "当你需要向用户展示一个“产物”（代码改动对比、可预览文档/文件、图片、网页或点云预览，"
     "或一条结构化消息）时，在正文中单独输出一个产物标记块。系统会捕获该标记块、"
     "渲染成内联卡片，并自动把标记本身从展示文本里移除。\n\n"
     "重要：你不能直接调用 agent_flow 的 inline_artifact 工具；Claude Code / Codex 的"
@@ -151,6 +151,7 @@ ARTIFACT_PROTOCOL_INSTRUCTION = (
     '- diff     代码改动对比：{"title","before","after","file_path"?,"language"?,"metadata"?}\n'
     '- document 可预览文档/文件：{"title","content","format"?(md/py/js/json/txt...),"language"?,"editable"?,"metadata"?}\n'
     '- web      网页预览：{"title","url"?,"html"?,"preview_title"?,"metadata"?}\n'
+    '- point_cloud PLY 点云预览：{"title","url","source_label"?,"point_count"?,"mime_type"?,"metadata"?}\n'
     '- deploy   后台真实部署（系统会在 127.0.0.1 真起一个端口，前端出现带实时预览且可一键关闭端口的部署卡片）：\n'
     '           {"kind":"static"|"command","title","source_dir"?,"command"?,"entry"?,"files"?,"env"?}\n'
     '           · kind=static：把一个**已存在的目录**作为静态网页托管，source_dir 填该目录相对你工作目录的路径（如 "dist" 或 "."），entry 默认 index.html；\n'
@@ -285,5 +286,4 @@ class SkillProvider(MemoryProvider):
         parts = ["## 召回技能（Skills）——可直接参考其中的方法/步骤完成当前任务"]
         parts += [item.content for item in items if str(item.content or "").strip()]
         return ["\n\n".join(parts)] if len(parts) > 1 else []
-
 

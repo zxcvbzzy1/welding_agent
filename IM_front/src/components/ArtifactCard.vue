@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import {
+  AimOutlined,
   BranchesOutlined,
   CheckOutlined,
   CloudServerOutlined,
@@ -21,6 +22,7 @@ import {
   SaveOutlined,
 } from '@ant-design/icons-vue'
 import { imApi } from '@/api/im'
+import PointCloudViewer from '@/components/PointCloudViewer.vue'
 import { looksLikeMarkdownDoc, renderMarkdown } from '@/utils/markdown'
 
 const props = defineProps({
@@ -45,10 +47,9 @@ const canApplyDiff = computed(() => artifactType.value === 'diff' && Boolean(edi
 const canSaveDoc = computed(() => Boolean(editable.value && docFilePath.value && editAgentId.value))
 const canShowHistory = computed(() => Boolean(docFilePath.value && editAgentId.value))
 
-// 放大查看：仅文本类（文档/消息/Diff）内联渲染时内容易超高、列宽局促，提供头部「放大」入口；
-// web/deploy 已有 iframe 视口、image 天然受限，不加。父级在全屏弹窗内置 expandable=false 关闭。
+// 文本类和点云支持放大查看；父级在全屏弹窗内置 expandable=false 关闭，避免递归放大。
 const canExpand = computed(
-  () => props.expandable && ['document', 'message', 'diff'].includes(artifactType.value),
+  () => props.expandable && ['document', 'message', 'diff', 'point_cloud'].includes(artifactType.value),
 )
 function emitExpand() {
   emit('expand', props.artifact)
@@ -164,6 +165,7 @@ const typeMeta = {
   document: { icon: FileTextOutlined, label: '文档' },
   web: { icon: GlobalOutlined, label: '网页' },
   deploy: { icon: CloudServerOutlined, label: '部署' },
+  point_cloud: { icon: AimOutlined, label: '点云' },
 }
 
 const headerIcon = computed(() => (typeMeta[artifactType.value] || typeMeta.message).icon)
@@ -397,7 +399,14 @@ function toggleSegment(segId) {
 }
 
 function defaultTitle(type) {
-  return { message: '消息', image: '图片', diff: '代码改动', document: '文档', web: '网页预览' }[type] || '产物'
+  return {
+    message: '消息',
+    image: '图片',
+    diff: '代码改动',
+    document: '文档',
+    web: '网页预览',
+    point_cloud: '点云预览',
+  }[type] || '产物'
 }
 
 function copy(text) {
@@ -475,6 +484,16 @@ function downloadArtifact() {
       anchor.href = artifact.url
       const urlBasename = artifact.url.split('/').pop()?.split('?')[0] || 'image'
       anchor.download = (artifact.title || urlBasename || 'image').replace(/\s+/g, '_')
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+    }
+  } else if (type === 'point_cloud') {
+    if (artifact.url) {
+      const anchor = document.createElement('a')
+      anchor.href = artifact.url
+      const urlBasename = artifact.url.split('/').pop()?.split('?')[0] || 'point_cloud.ply'
+      anchor.download = artifact.source_label || urlBasename
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -570,6 +589,13 @@ function downloadArtifact() {
         </a-button>
       </template>
 
+      <template v-else-if="artifactType === 'point_cloud'">
+        <a-tag v-if="artifact.point_count" size="small">{{ artifact.point_count.toLocaleString() }} 点</a-tag>
+        <a-button type="text" size="small" @click="downloadArtifact">
+          <template #icon><DownloadOutlined /></template>
+        </a-button>
+      </template>
+
       <template v-else-if="artifactType === 'deploy'">
         <a-tag
           v-if="deployStatus === 'running'"
@@ -628,6 +654,16 @@ function downloadArtifact() {
       <img v-if="artifact.url" :src="artifact.url" :alt="artifact.alt || title" class="artifact-image" />
       <a-empty v-else description="缺少图片地址" :image-style="{ height: '40px' }" />
       <small v-if="artifact.alt" class="artifact-caption">{{ artifact.alt }}</small>
+    </div>
+
+    <!-- point cloud -->
+    <div v-else-if="artifactType === 'point_cloud'" class="artifact-body artifact-point-cloud-body">
+      <PointCloudViewer
+        v-if="artifact.url"
+        :source-url="artifact.url"
+        :source-label="artifact.source_label || title"
+      />
+      <a-empty v-else description="缺少点云文件地址" :image-style="{ height: '40px' }" />
     </div>
 
     <!-- diff -->
@@ -1026,5 +1062,10 @@ function downloadArtifact() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+}
+.artifact-point-cloud-body {
+  height: min(58vh, 560px);
+  min-height: 360px;
+  padding: 0;
 }
 </style>

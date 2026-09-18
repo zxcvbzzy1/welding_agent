@@ -42,7 +42,7 @@ AgentHub 是一个以 IM 聊天为交互入口的多 Agent 协作平台。用户
 从仓库根目录执行：
 
 ```bash
-python -m uvicorn im_backend.api.index:app --host 127.0.0.1 --port 8010
+python -m uvicorn im_backend.api.index:app --host 0.0.0.0 --port 8010
 ```
 
 健康检查：

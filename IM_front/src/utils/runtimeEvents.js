@@ -29,6 +29,7 @@ export const runtimeEventNames = new Set([
   'artifacts.document',
   'artifacts.web',
   'artifacts.deploy',
+  'artifacts.point_cloud',
 ])
 
 export const artifactEventNames = [
@@ -38,6 +39,7 @@ export const artifactEventNames = [
   'artifacts.document',
   'artifacts.web',
   'artifacts.deploy',
+  'artifacts.point_cloud',
 ]
 
 export function isArtifactEvent(event) {
@@ -100,6 +102,7 @@ export const sseEventNames = [
   'artifacts.document',
   'artifacts.web',
   'artifacts.deploy',
+  'artifacts.point_cloud',
 ]
 
 // llm.delta（原生模型流式）与 agent.delta（第三方 coding agent 流式）都会逐 token/chunk 发出。

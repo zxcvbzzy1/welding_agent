@@ -746,6 +746,22 @@ def test_inline_artifact_tool_builds_defaults_and_validates():
     assert image_payload["artifact"]["editable"] is False
     assert image_payload["artifact"]["url"] == "https://example.test/image.png"
 
+    point_cloud_payload = InlineArtifactTool().build_event_payload(
+        {
+            "artifact_type": "point_cloud",
+            "point_cloud": {
+                "title": "Cloud",
+                "url": "https://example.test/cloud.ply",
+                "source_label": "cloud.ply",
+                "point_count": 123,
+            },
+        }
+    )
+    assert point_cloud_payload["event_name"] == "artifacts.point_cloud"
+    assert point_cloud_payload["artifact"]["type"] == "point_cloud"
+    assert point_cloud_payload["artifact"]["point_count"] == 123
+    assert point_cloud_payload["artifact"]["editable"] is False
+
     with pytest.raises(ValueError, match="artifact_type"):
         InlineArtifactTool().build_event_payload(
             {"artifact_type": "unknown"}
