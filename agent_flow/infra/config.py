@@ -40,7 +40,7 @@ providers = [
     MemoryDocumentProvider(),
     StateProvider(),
     ErrorProvider(memory),
-    AvailableToolsProvider(["system", "search", "memory", "write_agent", "human"]),
+    AvailableToolsProvider(["system", "search", "memory", "write_agent", "human", "camera"]),
     HistoryProvider(memory, "agent_history", FullHistoryStrategy()),
     ReActToolFeedbackProvider(memory, "tool_respond", FullHistoryStrategy() | RecencyStrategy(10) | ChunkToFileStrategy("./mid",4000,4000)),
 ]

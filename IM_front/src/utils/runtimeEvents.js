@@ -28,6 +28,7 @@ export const runtimeEventNames = new Set([
   'artifacts.document',
   'artifacts.web',
   'artifacts.deploy',
+  'artifacts.point_cloud',
 ])
 
 export const artifactEventNames = [
@@ -37,6 +38,7 @@ export const artifactEventNames = [
   'artifacts.document',
   'artifacts.web',
   'artifacts.deploy',
+  'artifacts.point_cloud',
 ]
 
 export function isArtifactEvent(event) {
@@ -99,6 +101,7 @@ export const sseEventNames = [
   'artifacts.document',
   'artifacts.web',
   'artifacts.deploy',
+  'artifacts.point_cloud',
 ]
 
 // 把同一路 llm.delta 增量合并成单个合成事件，避免大量 token 撑爆事件数组和轨迹列表。
