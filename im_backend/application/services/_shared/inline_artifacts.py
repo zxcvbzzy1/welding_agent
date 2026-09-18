@@ -14,7 +14,15 @@ from typing import Any, Iterable
 
 ARTIFACT_EVENT_PREFIX = "artifacts."
 ARTIFACT_PART_TYPE = "artifact"
-VALID_ARTIFACT_TYPES = {"message", "image", "diff", "document", "web", "deploy"}
+VALID_ARTIFACT_TYPES = {
+    "message",
+    "image",
+    "diff",
+    "document",
+    "web",
+    "deploy",
+    "point_cloud",
+}
 
 
 def is_artifact_event(event: dict[str, Any]) -> bool:
@@ -53,7 +61,7 @@ def artifact_to_content_part(
     }
     if artifact_type in {"message", "document"}:
         part["text"] = artifact.get("content", "")
-    elif artifact_type in {"image", "web", "deploy"}:
+    elif artifact_type in {"image", "web", "deploy", "point_cloud"}:
         part["url"] = artifact.get("url", "")
     elif artifact_type == "diff":
         # diff 的前后内容保留在 metadata.artifact 里，after 拍平到 diff 字段做兜底。
@@ -224,6 +232,13 @@ def artifact_download_file(
                 except OSError:
                     pass
         return f"image-{index}.url.txt", url.encode("utf-8")
+
+    if artifact_type == "point_cloud":
+        url = str(artifact.get("url") or "")
+        raw_title = str(artifact.get("source_label") or artifact.get("title") or "")
+        base = _safe_filename(raw_title, f"point-cloud-{index}.ply")
+        filename = f"{base}.url.txt"
+        return filename, url.encode("utf-8")
 
     # default / unknown
     content = str(artifact.get("content") or artifact.get("url") or "")

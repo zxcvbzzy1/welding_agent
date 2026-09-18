@@ -9,6 +9,7 @@ ToolField = Literal[
     "human",       # 人机协作
     "write_agent",   # 代理特有工具
     "robot",   # 机器人特有工具
+    "camera",  # 相机特有工具
 ]
 
 # 工具返回格式
@@ -58,5 +59,4 @@ class Tool:
     def to_cypher_props(self) -> str:
         """序列化为 Neo4j 属性字符串（嵌套在节点属性内）。"""
         return json.dumps(self.to_dict(), ensure_ascii=False)
-
 

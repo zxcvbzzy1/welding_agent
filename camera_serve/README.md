@@ -14,7 +14,7 @@ sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-bad gstreamer1.0-plugin
 
 ```bash
 conda run -n camera python -m pip install -r camera_serve/requirements.txt
-conda run -n camera uvicorn camera_serve.main:app --host 0.0.0.0 --port 8000
+conda run -n camera uvicorn camera_serve.main:app --host 0.0.0.0 --port 7899
 ```
 
 接口文档位于 `http://<server-ip>:8000/docs`。服务不会在启动时自动连接相机，应先调用发现和连接接口：
