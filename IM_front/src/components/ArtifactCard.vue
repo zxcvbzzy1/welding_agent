@@ -170,6 +170,15 @@ const typeMeta = {
 
 const headerIcon = computed(() => (typeMeta[artifactType.value] || typeMeta.message).icon)
 const typeLabel = computed(() => (typeMeta[artifactType.value] || typeMeta.message).label)
+const pointCloudRenderStats = ref({ original: 0, rendered: 0, max: 100000 })
+
+function updatePointCloudRenderStats(stats = {}) {
+  pointCloudRenderStats.value = {
+    original: Number(stats.original) || 0,
+    rendered: Number(stats.rendered) || 0,
+    max: Number(stats.max) || 100000,
+  }
+}
 
 // document 本地编辑态（不回写后端）
 const docMode = ref('preview')
@@ -179,6 +188,7 @@ watch(
   (value) => {
     docContent.value = value?.content || ''
     docMode.value = 'preview'
+    pointCloudRenderStats.value = { original: 0, rendered: 0, max: 100000 }
   },
   { immediate: true, deep: true },
 )
@@ -590,7 +600,12 @@ function downloadArtifact() {
       </template>
 
       <template v-else-if="artifactType === 'point_cloud'">
-        <a-tag v-if="artifact.point_count" size="small">{{ artifact.point_count.toLocaleString() }} 点</a-tag>
+        <a-tag v-if="pointCloudRenderStats.rendered" size="small" color="blue">
+          当前渲染 {{ pointCloudRenderStats.rendered.toLocaleString() }} 点
+        </a-tag>
+        <a-tag v-else-if="artifact.point_count" size="small">
+          共 {{ Number(artifact.point_count).toLocaleString() }} 点
+        </a-tag>
         <a-button type="text" size="small" @click="downloadArtifact">
           <template #icon><DownloadOutlined /></template>
         </a-button>
@@ -662,6 +677,7 @@ function downloadArtifact() {
         v-if="artifact.url"
         :source-url="artifact.url"
         :source-label="artifact.source_label || title"
+        @loaded="updatePointCloudRenderStats"
       />
       <a-empty v-else description="缺少点云文件地址" :image-style="{ height: '40px' }" />
     </div>
