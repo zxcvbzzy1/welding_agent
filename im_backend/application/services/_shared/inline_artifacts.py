@@ -25,6 +25,30 @@ VALID_ARTIFACT_TYPES = {
 }
 
 
+def artifact_identity(artifact: dict[str, Any]) -> str:
+    artifact_type = str(artifact.get("type", "message")).strip().lower()
+    url = str(artifact.get("url") or "").strip()
+    if url:
+        return f"{artifact_type}|url|{url}"
+    metadata = artifact.get("metadata") or {}
+    file_path = str(artifact.get("file_path") or metadata.get("file_path") or "").strip()
+    if file_path:
+        return f"{artifact_type}|file|{file_path}"
+    label = str(
+        artifact.get("title")
+        or artifact.get("preview_title")
+        or ""
+    )
+    body = str(
+        artifact.get("content")
+        or artifact.get("after")
+        or artifact.get("html")
+        or artifact.get("alt")
+        or ""
+    )
+    return f"{artifact_type}|{label}|{len(body)}|{body[:160]}"
+
+
 def is_artifact_event(event: dict[str, Any]) -> bool:
     return str(event.get("name", "")).startswith(ARTIFACT_EVENT_PREFIX)
 
@@ -83,6 +107,7 @@ def collect_inline_artifact_parts(
 
     parts: list[dict[str, Any]] = []
     seen_event_ids: set[str] = set()
+    seen_artifact_identities: set[str] = set()
     ordered = sorted(events or [], key=lambda item: item.get("created_at") or 0)
     for event in ordered:
         if not is_artifact_event(event):
@@ -101,6 +126,10 @@ def collect_inline_artifact_parts(
             if event_id in seen_event_ids:
                 continue
             seen_event_ids.add(event_id)
+        identity = artifact_identity(artifact)
+        if identity in seen_artifact_identities:
+            continue
+        seen_artifact_identities.add(identity)
         parts.append(
             artifact_to_content_part(
                 artifact,
