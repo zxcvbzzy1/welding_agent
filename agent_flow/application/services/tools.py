@@ -34,6 +34,7 @@ class ToolRegistryService:
         import infra.tool.builtin.robot  # noqa: F401
         import infra.tool.builtin.camera  # noqa: F401
         import infra.tool.builtin.cad_welding_path  # noqa: F401
+        import infra.tool.builtin.point_cloud_welding  # noqa: F401
         import infra.tool.tools_attach_methods  # noqa: F401
         # 加载技能文件并把检索器注册到 runtime_hooks（系统召回 + recall_skill 工具共用）。
         # 放在工具加载阶段：agent_flow 与 im_backend 两条启动路径都会经过这里，幂等。
@@ -63,7 +64,7 @@ class ToolRegistryService:
         try:
             from infra.tool.builtin import robot
 
-            for tool_id in ("robot_move_to", "robot_move_by"):
+            for tool_id in ("robot_move_to", "robot_move_by", "robot_move_seam"):
                 record = self._store.find_one("tools", {"tool_id": tool_id}) or {}
                 cfg = record.get("config") or {}
                 if cfg:

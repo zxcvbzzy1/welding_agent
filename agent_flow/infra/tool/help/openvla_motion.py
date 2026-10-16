@@ -13,7 +13,6 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
-from fairino import Robot
 
 try:
     import pyzed.sl as sl
@@ -690,6 +689,8 @@ class OpenVLAEpisodeRecorder:
 class FairinoLinearMotion:
     """Small wrapper around FAIRINO MoveL for Cartesian linear motion."""
 
+    motion_lock = threading.RLock()
+
     def __init__(
         self,
         robot,
@@ -725,6 +726,10 @@ class FairinoLinearMotion:
         max_linear_delta: Optional[float] = 50.0,
         max_angle_delta: Optional[float] = 20.0,
     ):
+        try:
+            from fairino import Robot
+        except ImportError as exc:
+            raise RuntimeError("未安装 FAIRINO SDK；离线提取和 dry_run 仍可使用") from exc
         robot = Robot.RPC(robot_ip)
         return cls(
             robot=robot,

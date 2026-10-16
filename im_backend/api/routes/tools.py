@@ -86,7 +86,7 @@ async def patch_tool_config(
             danger_policy=merged.get("danger_policy"),
             auto_confirm=merged.get("auto_confirm"),
         )
-    if tool_name in {"robot_move_to", "robot_move_by"}:
+    if tool_name in {"robot_move_to", "robot_move_by", "robot_move_seam"}:
         robot_tool.set_robot_settings(auto_confirm=merged.get("auto_confirm"))
 
     return {"item": {"name": tool_name, "config": merged}}
