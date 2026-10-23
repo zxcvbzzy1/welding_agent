@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { BookOutlined, LogoutOutlined, MessageOutlined, ToolOutlined, VideoCameraOutlined, DatabaseOutlined } from '@ant-design/icons-vue'
+import { BookOutlined, LogoutOutlined, MessageOutlined, ToolOutlined, VideoCameraOutlined, DatabaseOutlined, RobotOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useIMStore } from '@/stores/im'
 
@@ -79,6 +79,10 @@ onUnmounted(() => {
           <RouterLink :to="{ name: 'camera' }" class="topbar-pill-seg" :class="{ 'topbar-pill-seg--active': activeNav === 'camera' }">
             <VideoCameraOutlined class="pill-icon" />
             <span>相机</span>
+          </RouterLink>
+          <RouterLink :to="{ name: 'robot' }" class="topbar-pill-seg" :class="{ 'topbar-pill-seg--active': activeNav === 'robot' }">
+            <RobotOutlined class="pill-icon" />
+            <span>机械臂</span>
           </RouterLink>
           <RouterLink :to="{ name: 'memory' }" class="topbar-pill-seg" :class="{ 'topbar-pill-seg--active': activeNav === 'memory' }">
             <DatabaseOutlined class="pill-icon" />
@@ -277,11 +281,12 @@ onUnmounted(() => {
 
   .topbar-pill {
     width: 100%;
+    flex-wrap: wrap;
   }
 
   .topbar-pill-seg {
-    flex: 1 1 0;
-    min-width: 0;
+    flex: 1 1 calc(33.333% - 4px);
+    min-width: 90px;
     padding-inline: 10px;
   }
 

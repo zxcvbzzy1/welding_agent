@@ -16,7 +16,7 @@ human_auditor = HumanCollaborationAuditor(factory, bus)
 # Builtin modules own their Tool declarations and called/human handlers, like
 # system.py. Import both welding tools here as well as in the application loader
 # so the event-binding entrypoint is complete for standalone event-bus users.
-from infra.tool.builtin import point_cloud_welding, robot  # noqa: E402,F401
+from infra.tool.builtin import point_cloud_welding, robot, robot_simulation  # noqa: E402,F401
 
 
 # 中间件

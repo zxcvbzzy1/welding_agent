@@ -137,7 +137,7 @@ def prepare_cloud(points, unit, input_frame, camera_to_base, camera_position_bas
     elif input_frame == "robot_base":
         if camera_to_base is not None:
             raise ValueError("基座坐标点云不得再次提供 camera_to_base")
-        viewpoint = vector(camera_position_base, 3, "camera_position_base")
+        viewpoint = None if camera_position_base is None else vector(camera_position_base, 3, "camera_position_base")
     else:
         raise ValueError("input_frame 只支持 robot_base 或 camera")
     clean_count = len(points)
