@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test:events": "node --test src/utils/eventStream.test.js src/utils/conversationScope.test.js src/utils/chatItems.test.js src/utils/composerPlan.test.js src/utils/workspaceImport.test.js src/utils/toolSelection.test.js src/utils/uuid.test.js src/utils/humanQuestions.test.js src/utils/contextUsage.test.js checks/trace_client_check.mjs",
-    "preview": "vite preview"
+    "test:events": "node --test src/utils/eventStream.test.js src/utils/conversationScope.test.js src/utils/chatItems.test.js src/utils/composerPlan.test.js src/utils/workspaceImport.test.js src/utils/toolSelection.test.js src/utils/humanQuestions.test.js src/utils/contextUsage.test.js checks/trace_client_check.mjs",
+    "preview": "vite preview",
+    "test:robot": "node --test src/utils/robotPlayback.test.js"
   },
   "dependencies": {
     "@ant-design/icons-vue": "^7.0.1",
@@ -21,6 +22,7 @@
     "markdown-it": "^14.2.0",
     "pinia": "^3.0.4",
     "three": "^0.186.0",
+    "urdf-loader": "^0.13.1",
     "vue": "^3.5.32",
     "vue-router": "^5.0.4"
   },

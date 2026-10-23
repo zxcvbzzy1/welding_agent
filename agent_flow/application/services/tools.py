@@ -31,6 +31,7 @@ class ToolRegistryService:
         import infra.tool.builtin.diff_editor  # noqa: F401
         import infra.tool.builtin.skill  # noqa: F401
         import infra.tool.builtin.delegate_agent  # noqa: F401
+        import infra.tool.builtin.robot_simulation  # noqa: F401
         import infra.tool.builtin.robot  # noqa: F401
         import infra.tool.builtin.camera  # noqa: F401
         import infra.tool.builtin.cad_welding_path  # noqa: F401

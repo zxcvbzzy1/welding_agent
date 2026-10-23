@@ -138,7 +138,7 @@ npm --prefix IM_front run build
 不需要副本集、事务或 Outbox。Agent 由创建它的 API worker 执行，不自动接管或重跑。
 
 ```bash
-/Users/zxcvbzzy1/miniconda3/envs/MY_env/bin/python -m uvicorn im_backend.api.index:app --host 127.0.0.1 --port 8010 --workers 2
+/Users/zxcvbzzy1/miniconda3/envs/test_for_master/bin/python -m uvicorn im_backend.api.index:app --host 127.0.0.1 --port 8010 --workers 2
 ```
 
 ### 数据与职责

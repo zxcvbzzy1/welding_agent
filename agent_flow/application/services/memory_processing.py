@@ -27,7 +27,9 @@ class MemoryProcessingService:
         self._tick_lock = asyncio.Lock()
 
     def readiness(self):
-        return {"jev_ready": self.classifier.ready(), "extraction_ready": self.extractor.ready(),
+        diagnostic = self.classifier.diagnostics() if hasattr(self.classifier, "diagnostics") else {}
+        return {"jev_ready": self.classifier.ready(), "jev_status": diagnostic.get("status"),
+                "jev_reason": diagnostic.get("reason", ""), "extraction_ready": self.extractor.ready(),
                 "jev_model": self.classifier.model, "extraction_model": self.extractor.model}
 
     def delete_batch(self, user_id, batch_id):
@@ -365,7 +367,7 @@ class MemoryProcessingService:
             return
         except Exception as exc:
             # SDK exception strings may include response bodies. Expose only safe diagnostics.
-            error = str(exc)[:500] if isinstance(exc, ValueError) else f"{type(exc).__name__}；请检查服务端模型连接后重试"
+            error = getattr(exc, "safe_message", None) or (str(exc)[:500] if isinstance(exc, ValueError) else f"{type(exc).__name__}；请检查服务端模型连接后重试")
             await self._save(batch, owner, {"status": "finalizing", "outcome": "failed", "error": error,
                 "failed_stage": batch["stage"], "failed_at": time.time(), "publication_blocks": []})
         # Storage failures leave the frozen outbox pending; never turn them into a
