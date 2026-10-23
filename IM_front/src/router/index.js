@@ -26,6 +26,7 @@ const router = createRouter({
         { path: 'skills', name: 'skills', component: () => import('@/views/SkillsView.vue') },
         { path: 'tools', name: 'tools', component: () => import('@/views/ToolsView.vue') },
         { path: 'camera', name: 'camera', component: () => import('@/views/CameraView.vue') },
+        { path: 'robot', name: 'robot', component: () => import('@/views/RobotView.vue') },
         { path: 'memory', name: 'memory', component: () => import('@/views/MemoryView.vue') },
       ],
     },

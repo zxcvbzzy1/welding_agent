@@ -17,6 +17,9 @@ class JevClassifier:
     def ready(self):
         return self.client.ready()
 
+    def diagnostics(self):
+        return self.client.diagnostics()
+
     async def noul(self, candidate):
         # Include provenance and run outcome as well as the unmodified text.
         result = await self.client.noul(candidate, GATE_PROMPT, key="memory")

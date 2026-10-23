@@ -21,7 +21,7 @@ INLINE_ARTIFACT = Tool(
     name="inline_artifact",
     description=(
         "创建消息内联产物展示，支持普通消息、图片消息、diff 卡片、"
-        "可编辑文档预览、网页预览和点云预览。图片可通过 image.file_path 读取 agent_flow/temp 内的本地图片。"
+        "可编辑文档预览、网页预览、点云预览和机械臂轨迹仿真。图片可通过 image.file_path 读取 agent_flow/temp 内的本地图片。"
         "当用户命令有产物要求时，调用这个展示产物"
     ),
     field="system",
@@ -30,7 +30,7 @@ INLINE_ARTIFACT = Tool(
         "properties": {
             "artifact_type": {
                 "type": "string",
-                "enum": ["message", "image", "diff", "document", "web", "point_cloud"],
+                "enum": ["message", "image", "diff", "document", "web", "point_cloud", "robot_simulation"],
                 "description": "产物类型",
             },
             "image": {
@@ -90,6 +90,11 @@ INLINE_ARTIFACT = Tool(
                     "metadata": {"type": "object", "description": "前端渲染附加信息"},
                 },
             },
+            "robot_simulation": {
+                "type": "object", "description": "已生成的离线机械臂仿真",
+                "required": ["simulation_id"], "properties": {
+                    "simulation_id": {"type": "string", "description": "robot_simulate_trajectory 返回的仿真 ID"},
+                    "title": {"type": "string"}}},
             "point_cloud": {
                 "type": "object",
                 "description": "PLY 点云预览产物参数",
@@ -109,7 +114,7 @@ INLINE_ARTIFACT = Tool(
 
 
 class InlineArtifactTool:
-    VALID_TYPES = {"message", "image", "diff", "document", "web", "point_cloud"}
+    VALID_TYPES = {"message", "image", "diff", "document", "web", "point_cloud", "robot_simulation"}
     MIME_BY_FORMAT = {
         "md": "text/markdown",
         "markdown": "text/markdown",
@@ -173,6 +178,7 @@ class InlineArtifactTool:
             "document": self._build_document,
             "web": self._build_web,
             "point_cloud": self._build_point_cloud,
+            "robot_simulation": self._build_robot_simulation,
         }
         return builders[artifact_type](self._require_section(arguments, artifact_type))
 
@@ -262,6 +268,10 @@ class InlineArtifactTool:
             "metadata": params.get("metadata") or {},
             "editable": False,
         }
+
+    def _build_robot_simulation(self, params):
+        from infra.tool.help.robot_simulation import read_simulation, simulation_artifact
+        return simulation_artifact(read_simulation(params.get("simulation_id")), params.get("title") or "机械臂轨迹仿真")
 
     def _build_point_cloud(self, params: dict[str, Any]) -> dict[str, Any]:
         return {

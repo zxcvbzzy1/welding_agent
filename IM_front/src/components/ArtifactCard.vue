@@ -19,10 +19,12 @@ import {
   MessageOutlined,
   PictureOutlined,
   RollbackOutlined,
+  RobotOutlined,
   SaveOutlined,
 } from '@ant-design/icons-vue'
 import { imApi } from '@/api/im'
 import PointCloudViewer from '@/components/PointCloudViewer.vue'
+import RobotSimulator from '@/components/RobotSimulator.vue'
 import { looksLikeMarkdownDoc, renderMarkdown } from '@/utils/markdown'
 
 const props = defineProps({
@@ -49,7 +51,7 @@ const canShowHistory = computed(() => Boolean(docFilePath.value && editAgentId.v
 
 // 文本类和点云支持放大查看；父级在全屏弹窗内置 expandable=false 关闭，避免递归放大。
 const canExpand = computed(
-  () => props.expandable && ['document', 'message', 'diff', 'point_cloud'].includes(artifactType.value),
+  () => props.expandable && ['document', 'message', 'diff', 'point_cloud', 'robot_simulation'].includes(artifactType.value),
 )
 function emitExpand() {
   emit('expand', props.artifact)
@@ -166,6 +168,7 @@ const typeMeta = {
   web: { icon: GlobalOutlined, label: '网页' },
   deploy: { icon: CloudServerOutlined, label: '部署' },
   point_cloud: { icon: AimOutlined, label: '点云' },
+  robot_simulation: { icon: RobotOutlined, label: '机械臂仿真' },
 }
 
 const headerIcon = computed(() => (typeMeta[artifactType.value] || typeMeta.message).icon)
@@ -416,6 +419,7 @@ function defaultTitle(type) {
     document: '文档',
     web: '网页预览',
     point_cloud: '点云预览',
+    robot_simulation: '机械臂轨迹仿真',
   }[type] || '产物'
 }
 
@@ -680,6 +684,11 @@ function downloadArtifact() {
         @loaded="updatePointCloudRenderStats"
       />
       <a-empty v-else description="缺少点云文件地址" :image-style="{ height: '40px' }" />
+    </div>
+
+    <div v-else-if="artifactType === 'robot_simulation'" class="artifact-body artifact-robot-body">
+      <RobotSimulator v-if="artifact.url" :source-url="artifact.url" :compact="expandable" />
+      <a-empty v-else description="缺少仿真数据地址" />
     </div>
 
     <!-- diff -->

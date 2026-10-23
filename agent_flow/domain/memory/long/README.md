@@ -148,3 +148,9 @@ npm run build
 ```
 
 测试使用临时目录、`fakeredis`、`mongomock` 和伪事件/LLM，无需 MongoDB、Redis 服务或真实模型。测试环境需安装 `fakeredis>=2,<3`、`mongomock>=4,<5`；不会回填历史 run。
+
+### JEV 依赖诊断与恢复
+
+后端必须在实际启动服务的 Python 环境安装 `typesafe-sdk==0.7.1` 和 `pydantic>=2.12,<3`。`jev_ready` 同时检查 SDK 导入、依赖版本和密钥是否存在；新增 `jev_status`（`missing_dependency` / `missing_credentials` / `configured`）及 `jev_reason`。`configured` 不表示已经探测远端连接，查询配置不会发模型请求。缺依赖、缺密钥及鉴权失败不做无效重试，网络和服务端临时错误保留有限重试；诊断不包含凭据或响应正文。
+
+依赖修复后重启后端，在记忆页面对失败批次点击“重试批次”；复用已完成步骤，不需要删除记忆、清空 Redis 或重新归档历史 run。
