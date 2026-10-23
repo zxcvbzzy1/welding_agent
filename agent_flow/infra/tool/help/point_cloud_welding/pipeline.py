@@ -9,30 +9,37 @@ from uuid import uuid4
 
 import numpy as np
 
-from .geometry import extract_segments, fit_planes, order_planes, plan_seam_pose
+from .geometry import extract_segments, fit_planes, plan_seam_pose
 from .io import positive, prepare_cloud, read_point_cloud, vector
 
 TEMP_DIR = Path(__file__).resolve().parents[4] / "temp" / "point_cloud_welding"
 RENDER_LOCK = Lock()
 PAPER_CORRECTIONS = [
-    "Eq.7: use y-y_Cc in the y component (printed x_Cc is a typo).",
-    "Eq.9/11: orient normals toward the camera; use a scalar triple product for ordering.",
+    "Local-neighbor RANSAC and centroid refitting follow the paper's core method.",
+    "Finite intersections use measured two-face support instead of workpiece templates.",
     "Eq.25: Yg=Zg cross Xg produces a right-handed rotation.",
-    "Square tube L4: A to H, following Eq.19 and Fig.23 rather than Table 6's B to H.",
-    "Coplanar butt seams: use the visible surface normal when the dihedral bisector degenerates.",
 ]
 
 
-def extract_weld_seams(point_cloud_path: str, model_type: str, input_frame: str, *,
+def extract_weld_seams(point_cloud_path: str, model_type: str = "auto", input_frame: str = "robot_base", *,
                        unit="mm", camera_to_base=None, camera_position_base=None,
                        h_width_mm=None, tube_width_mm=None, voxel_size_mm=1.0,
                        sample_step_mm=2.0, posture_width_mm=5.0,
                        approach_distance_mm=10.0, retract_distance_mm=10.0,
-                       tcp_rotation_offset_deg=(0, 0, 0), ransac_iterations=10,
-                       plane_distance_threshold_mm=2.0, seed=0):
-    if model_type not in {"three_plane", "h_section", "square_tube"}:
-        raise ValueError("model_type 只支持 three_plane、h_section、square_tube")
+                       tcp_rotation_offset_deg=(0, 0, 0), ransac_iterations=100,
+                       plane_distance_threshold_mm=2.0, seed=0,
+                       max_planes=20, min_seam_length_mm=3.0, max_gap_mm=None):
+    if model_type not in {"auto", "three_plane", "h_section", "square_tube"}:
+        raise ValueError("model_type 只支持 auto 或已弃用的旧类别")
+    min_seam_length_mm = positive(min_seam_length_mm, "min_seam_length_mm")
+    if min_seam_length_mm < 3:
+        raise ValueError("min_seam_length_mm 不得小于 3 mm")
+    notices = []
+    if model_type != "auto" or h_width_mm is not None or tube_width_mm is not None:
+        notices.append("model_type 和工件宽度参数已弃用，统一使用通用平面相交提取，不参与几何计算")
     parameters = {
+        "min_seam_length_mm": positive(min_seam_length_mm, "min_seam_length_mm"),
+        "max_gap_mm": None if max_gap_mm is None else positive(max_gap_mm, "max_gap_mm"),
         "voxel_size_mm": positive(voxel_size_mm, "voxel_size_mm", allow_zero=True),
         "sample_step_mm": positive(sample_step_mm, "sample_step_mm"),
         "posture_width_mm": positive(posture_width_mm, "posture_width_mm"),
@@ -40,47 +47,46 @@ def extract_weld_seams(point_cloud_path: str, model_type: str, input_frame: str,
         "retract_distance_mm": positive(retract_distance_mm, "retract_distance_mm"),
         "plane_distance_threshold_mm": positive(plane_distance_threshold_mm, "plane_distance_threshold_mm"),
     }
-    for name, value, upper in (("seed", seed, 2**32 - 1), ("ransac_iterations", ransac_iterations, 10000)):
+    for name, value, upper in (("seed", seed, 2**32 - 1), ("ransac_iterations", ransac_iterations, 10000), ("max_planes", max_planes, 100)):
         if isinstance(value, bool) or not isinstance(value, int) or not (0 if name == "seed" else 1) <= value <= upper:
             raise ValueError(f"{name} 必须是范围内的整数")
         parameters[name] = value
     correction = vector(tcp_rotation_offset_deg, 3, "tcp_rotation_offset_deg")
     parameters["tcp_rotation_offset_deg"] = correction.tolist()
-    for name, value, required in (("h_width_mm", h_width_mm, model_type == "h_section"),
-                                  ("tube_width_mm", tube_width_mm, model_type == "square_tube")):
-        if required and value is None:
-            raise ValueError(f"此模型必须提供 {name}，不默认套用论文样件尺寸")
+    for name, value in (("h_width_mm", h_width_mm), ("tube_width_mm", tube_width_mm)):
         if value is not None:
-            if not required:
-                raise ValueError(f"{name} 不适用于当前模型")
-            parameters[name] = positive(value, name)
+            positive(value, name)
     raw = read_point_cloud(point_cloud_path)
     points, sampled, viewpoint, statistics = prepare_cloud(
         raw, unit, input_frame, camera_to_base, camera_position_base, parameters["voxel_size_mm"])
-    count = {"three_plane": 3, "h_section": 4, "square_tube": 5}[model_type]
-    planes = order_planes(fit_planes(sampled, count, seed=seed, iterations=ransac_iterations,
-                                    threshold=parameters["plane_distance_threshold_mm"]), model_type, viewpoint)
+    planes = fit_planes(sampled, seed=seed, iterations=ransac_iterations,
+                        threshold=parameters["plane_distance_threshold_mm"], max_planes=max_planes)
     seams, intersection_quality = extract_segments(
-        planes, points, model_type, parameters.get("h_width_mm"), parameters.get("tube_width_mm"))
+        planes, points, threshold=parameters["plane_distance_threshold_mm"],
+        min_length=parameters["min_seam_length_mm"], max_gap=parameters["max_gap_mm"])
     for seam in seams:
         try:
+            if viewpoint is None:
+                raise ValueError("未提供相机位置，仅输出焊缝几何；姿态生成需要 camera_position_base")
+            geometry_quality = seam["quality"]
             seam.update(plan_seam_pose(
                 seam, planes, points, viewpoint,
                 **{name: parameters[name] for name in (
                     "sample_step_mm", "posture_width_mm", "approach_distance_mm",
                     "retract_distance_mm", "tcp_rotation_offset_deg")},
             ))
+            seam["quality"] = {**geometry_quality, **seam["quality"]}
         except ValueError as exc:
             seam.update({"executable": False, "poses": [], "waypoints": [],
-                         "quality": {"orientation_error": str(exc)}})
+                         "quality": {**seam.get("quality", {}), "orientation_error": str(exc)}})
     document = {
         "schema_version": 1, "frame": "robot_base",
         "units": {"position": "mm", "angle": "degree"},
         "rotation_convention": "Rz(rz) Ry(ry) Rx(rx)",
-        "tcp_origin": "calibrated_welding_tip", "model_type": model_type,
+        "tcp_origin": "calibrated_welding_tip", "model_type": "auto", "warnings": notices,
         "source": {"point_cloud_path": str(Path(point_cloud_path).expanduser().resolve()),
                    "input_frame": input_frame, "unit": unit,
-                   "camera_position_base": viewpoint.tolist(),
+                   "camera_position_base": None if viewpoint is None else viewpoint.tolist(),
                    "camera_to_base": None if camera_to_base is None else np.asarray(camera_to_base).tolist()},
         "parameters": parameters, "statistics": statistics,
         "planes": [plane.to_dict(i) for i, plane in enumerate(planes, 1)],
@@ -110,6 +116,7 @@ def extract_weld_seams(point_cloud_path: str, model_type: str, input_frame: str,
         "trajectory_path": str(destination / "trajectory.json"), "csv_path": str(destination / "trajectory.csv"),
         "image_path": image_path, "frame": "robot_base", "seam_count": len(seams),
         "executable_seam_count": sum(seam["executable"] for seam in seams),
+        "warnings": notices, "intersection_quality": intersection_quality,
         "point_count": sum(len(seam["waypoints"]) for seam in seams), "statistics": statistics,
         "seams": [{key: seam[key] for key in ("id", "start", "end", "length_mm", "executable", "quality")} for seam in seams],
         "inline_artifact_arguments": {"artifact_type": "image", "image": {
@@ -130,7 +137,8 @@ def render_preview(points, seams, path, *, viewpoint=None):
         ax.scatter(*preview.T, s=0.8, c="#9baabc", alpha=0.25, rasterized=True)
         extents = [preview]
         colors = ["#e6550d", "#00876c", "#386cb0", "#ae017e"]
-        for seam, color in zip(seams, colors):
+        for index, seam in enumerate(seams):
+            color = colors[index % len(colors)]
             endpoints = np.asarray([seam["start"], seam["end"]])
             start, end = endpoints
             ax.plot(*endpoints.T, color=color, linewidth=3, label=seam["id"] + ("" if seam["executable"] else " (pose unavailable)"))
@@ -160,7 +168,8 @@ def render_preview(points, seams, path, *, viewpoint=None):
             azimuth = np.rad2deg(np.arctan2(view[1], view[0]))
             ax.view_init(elev=float(np.clip(elevation, 15, 60)), azim=float(azimuth))
         ax.set(xlabel="Base X (mm)", ylabel="Base Y (mm)", zlabel="Base Z (mm)", title="Point-cloud weld seams and approach poses")
-        ax.legend(loc="upper left")
+        if seams:
+            ax.legend(loc="upper left")
         figure.text(0.5, 0.025, "Triangles A#: approach poses   |   Dashed lines: approach / retract", ha="center", fontsize=9, color="#455466")
         figure.subplots_adjust(left=0, right=0.96, bottom=0.08, top=0.94)
         figure.savefig(path)

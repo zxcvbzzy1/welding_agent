@@ -134,8 +134,8 @@ onBeforeUnmount(() => { clearInterval(timer); ++listSequence; ++detailSequence }
           <label>Noul 收录阈值<a-input-number v-model:value="draft.noul_threshold" :disabled="!saved || saving || draft.mode === 'rules'" :min="0" :max="1" :step="0.05" /></label>
         </fieldset>
         <p class="rule-note">同一账号跨房间、跨会话组批。最早待处理 run 等待满 <strong>24 小时</strong>时，即使数量不足也会处理。成功、失败和取消的 run 均计数。</p>
-        <a-alert v-if="saved && (!server.jev_ready || !server.extraction_ready)" type="warning" show-icon message="模型配置未就绪" :description="`${!server.jev_ready ? 'JEV 凭据未配置。' : ''}${!server.extraction_ready ? '提取模型凭据未配置。' : ''}请在服务端配置后重试失败批次；不会自动切换规则模式。`" />
-        <p v-if="saved" class="muted">JEV：{{ server.jev_model }} · {{ server.jev_ready ? '已配置凭据' : '缺少凭据' }}<br>提取：{{ server.extraction_model }} · {{ server.extraction_ready ? '已配置凭据' : '缺少凭据' }}</p>
+        <a-alert v-if="saved && (!server.jev_ready || !server.extraction_ready)" type="warning" show-icon message="模型配置未就绪" :description="`${!server.jev_ready ? (server.jev_reason || 'JEV 未就绪。') : ''}${!server.extraction_ready ? '提取模型凭据未配置。' : ''}请在服务端配置后重试失败批次；不会自动切换规则模式。`" />
+        <p v-if="saved" class="muted">JEV：{{ server.jev_model }} · {{ server.jev_reason || (server.jev_ready ? '已配置，尚未检测连接' : '未就绪') }}<br>提取：{{ server.extraction_model }} · {{ server.extraction_ready ? '已配置凭据' : '缺少凭据' }}</p>
         <div class="actions"><a-button :disabled="!saved || saving" @click="Object.assign(draft, defaults)">恢复默认</a-button><a-button type="primary" :loading="saving" :disabled="!dirty || !valid" @click="save">保存配置</a-button></div>
         <p class="muted">保存只影响之后归档的 run；已入队数据继续使用原配置。恢复默认仅修改草稿。</p>
       </a-spin>

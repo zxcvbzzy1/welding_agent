@@ -1,4 +1,4 @@
-"""Paper sections 3--5: local RANSAC, ordered planes, finite seams and poses."""
+"""Paper-inspired local RANSAC, supported plane intersections and poses."""
 
 from dataclasses import dataclass
 import warnings
@@ -80,19 +80,19 @@ def _centroid_refit(points, rng, iterations, threshold):
     return Plane(center, normal, core)
 
 
-def fit_planes(points, count, *, seed=0, iterations=10, threshold=2.0):
+def fit_planes(points, count=None, *, seed=0, iterations=100, threshold=2.0, max_planes=20):
     rng = np.random.default_rng(seed)
     remaining = points.copy()
     planes = []
     minimum = max(30, int(len(points) * 0.003))
-    for _ in range(count):
+    for _ in range(count if count is not None else max_planes):
         if len(remaining) < minimum:
-            raise ValueError(f"平面数量不足，模型需要 {count} 个平面")
+            break
         tree = cKDTree(remaining)
         best = None
         for _ in range(iterations):
             first = remaining[rng.integers(len(remaining))]
-            neighbors = tree.query_ball_point(first, 10.0, p=np.inf)
+            neighbors = tree.query_ball_point(first, max(10.0, threshold * 5))
             if len(neighbors) < 4:
                 continue
             local = remaining[neighbors]
@@ -110,184 +110,102 @@ def fit_planes(points, count, *, seed=0, iterations=10, threshold=2.0):
             if best is None or score > best[0]:
                 best = (score, mask)
         if best is None or best[0] < minimum:
-            raise ValueError("RANSAC 平面支撑不足；请检查点密度、模型或增加 ransac_iterations")
-        plane = _centroid_refit(remaining[best[1]], rng, iterations, threshold)
-        planes.append(plane)
+            break
+        try:
+            plane = _centroid_refit(remaining[best[1]], rng, iterations, threshold)
+        except ValueError:
+            break
+        duplicate = next((p for p in planes if abs(p.normal @ plane.normal) > np.cos(np.deg2rad(3))
+                          and p.distances(plane.center[None, :])[0] < threshold), None)
+        if duplicate is not None:
+            merged = _centroid_refit(np.vstack((duplicate.points, plane.points)), rng, iterations, threshold)
+            duplicate.center, duplicate.normal, duplicate.points = merged.center, merged.normal, merged.points
+        else:
+            planes.append(plane)
         remaining = remaining[~(best[1] | (plane.distances(remaining) <= threshold))]
 
+    if not planes:
+        return []
     # Restore the boundary strips removed by sequential rough segmentation.
     distances = np.column_stack([plane.distances(points) for plane in planes])
     labels = distances.argmin(axis=1)
+    refined = []
     for index, plane in enumerate(planes):
         cloud = points[(labels == index) & (distances[:, index] <= threshold)]
         if len(cloud) < minimum:
-            raise ValueError("精拟合后的独立平面支撑不足")
-        planes[index] = _centroid_refit(cloud, rng, iterations, threshold)
-    return planes
+            continue
+        try:
+            refined.append(_centroid_refit(cloud, rng, iterations, threshold))
+        except ValueError:
+            continue
+    refined.sort(key=lambda p: tuple(np.round(p.center, 6)))
+    return refined
 
 
-def order_planes(planes, model_type, viewpoint):
-    horizontal = [p for p in planes if abs(p.normal[2]) >= np.cos(np.deg2rad(15))]
-    vertical = [p for p in planes if abs(p.normal[2]) <= np.sin(np.deg2rad(15))]
-    expected_horizontal = {"three_plane": 1, "h_section": 2, "square_tube": 3}[model_type]
-    if len(horizontal) != expected_horizontal or len(vertical) != 2:
-        raise ValueError("平面结构不符合所选构件；要求水平放置、两个相交立面及对应数量的水平面")
-    horizontal.sort(key=lambda p: p.center[2])
-    if any(b.center[2] - a.center[2] < 4 for a, b in zip(horizontal, horizontal[1:])):
-        raise ValueError("水平面高度过近或重复，无法区分构件平面")
-    for plane in planes:
-        facing = float(plane.normal @ (viewpoint - plane.center))
-        if abs(facing) < 1e-6:
-            raise ValueError("相机位置位于拟合平面上，无法确定可见面方向")
-        if facing < 0:
-            plane.normal = -plane.normal
-    base = horizontal[0]
-    # Lowest face normal is upward; ordering uses a scalar triple product,
-    # avoiding the division by a normal component printed in Eq. 11.
-    if base.normal[2] < 0:
-        raise ValueError("相机必须位于底面上方")
-    if np.linalg.norm(np.cross(vertical[0].normal, vertical[1].normal)) < 0.2:
-        raise ValueError("两个立面平行或近似平行，无法提取交线")
-    if np.dot(np.cross(vertical[0].normal, vertical[1].normal), base.normal) < 0:
-        vertical.reverse()
-    return [base, *vertical, *horizontal[1:]]
+def point_spacing(points):
+    """Robust measured spacing, ignoring duplicate samples."""
+    if len(points) < 2:
+        return 1.0
+    sample = points[np.linspace(0, len(points) - 1, min(2000, len(points)), dtype=int)]
+    distances = cKDTree(points).query(sample, k=2)[0][:, 1]
+    positive = distances[distances > 1e-8]
+    return float(np.median(positive)) if len(positive) else 1.0
 
 
-@dataclass
-class Line:
-    center: np.ndarray
-    direction: np.ndarray
-    low: float
-    high: float
-    support_count: int
-    rmse: float
-
-    @property
-    def endpoints(self):
-        return self.center + self.low * self.direction, self.center + self.high * self.direction
+def _intervals(values, gap):
+    values = np.sort(values)
+    groups = np.split(values, np.flatnonzero(np.diff(values) > gap) + 1)
+    return [(float(g[0]), float(g[-1]), len(g)) for g in groups if len(g) >= 4]
 
 
-def intersection_line(a, b, planes, points, band=2.0):
-    direction = normalized(np.cross(a.normal, b.normal))
-    normals = np.array([a.normal, b.normal])
+def extract_segments(planes, points, *, threshold=2.0, min_length=3.0, max_gap=None):
+    """Finite intersections supported by BOTH measured faces, never template edges."""
+    if len(planes) < 2:
+        return [], {"reason": "有效相交平面不足两个"}
+    spacing = point_spacing(points)
+    band = max(threshold * 1.5, spacing * 2)
+    gap = max_gap if max_gap is not None else max(spacing * 3, threshold * 2)
     distances = np.column_stack([p.distances(points) for p in planes])
     labels = distances.argmin(axis=1)
-    groups, extent_groups = [], []
-    for plane, other in ((a, b), (b, a)):
-        index = next(i for i, p in enumerate(planes) if p is plane)
-        surface_mask = (labels == index) & (plane.distances(points) <= band)
-        group = points[surface_mask & (other.distances(points) <= band)]
-        if len(group) < 8:
-            raise ValueError("平面交线缺少两侧有效支撑点")
-        groups.append(group)
-        # Use a wider strip solely for longitudinal bounds. A narrow strip has
-        # too few samples at a sparse terminal edge; plane labels still prevent
-        # the infinite continuation of a shorter face becoming a false seam.
-        extent_groups.append(points[surface_mask & (other.distances(points) <= max(8.0, band))])
-    support = np.concatenate(groups)
-    mean = support.mean(axis=0)
-    _, singular, vh = np.linalg.svd(support - mean, full_matrices=False)
-    if singular[0] < max(3 * singular[1], 1e-6):
-        raise ValueError("交线支撑点不具有稳定的直线方向")
-    if vh[0] @ direction < 0:
-        direction = -direction
-    # Project SVD's location/direction onto the two fitted planes. This removes
-    # the one-sided sampling bias of thick edge bands, preserving their extent.
-    origin = mean + normals.T @ np.linalg.solve(normals @ normals.T, [a.offset, b.offset] - normals @ mean)
-    bounds = [np.quantile((group - origin) @ direction, [0.005, 0.995]) for group in extent_groups]
-    low = max(bound[0] for bound in bounds)
-    high = min(bound[1] for bound in bounds)
-    if high - low < 3:
-        raise ValueError("相交平面的有限支撑范围不重叠或交线过短")
-    residual = np.linalg.norm(np.cross(support - origin, direction), axis=1)
-    return Line(origin, direction, float(low), float(high), len(support), float(np.sqrt(np.mean(residual ** 2))))
-
-
-def line_plane(line, plane):
-    denominator = float(plane.normal @ line.direction)
-    if abs(denominator) < 1e-6:
-        raise ValueError("直线与平面平行，无法确定焊缝端点")
-    t = (plane.offset - plane.normal @ line.center) / denominator
-    # A small edge band is allowed because rough segmentation removes corners.
-    if t < line.low - 3 or t > line.high + 3:
-        raise ValueError("焊缝交点位于点云有限支撑范围之外")
-    return line.center + t * line.direction
-
-
-def closest_intersection(first, second):
-    matrix = np.column_stack((first.direction, -second.direction))
-    if np.linalg.matrix_rank(matrix) < 2:
-        raise ValueError("焊缝交线平行，不能确定公共端点")
-    t, u = np.linalg.lstsq(matrix, second.center - first.center, rcond=None)[0]
-    p = first.center + t * first.direction
-    q = second.center + u * second.direction
-    if np.linalg.norm(p - q) > 3:
-        raise ValueError("焊缝交线不相交，构件结构不匹配")
-    return (p + q) / 2
-
-
-def extract_segments(planes, points, model_type, h_width_mm=None, tube_width_mm=None):
-    p1, p2, p3 = planes[:3]
-    lines = {}
-
-    def line(i, j):
-        key = tuple(sorted((i, j)))
-        if key not in lines:
-            lines[key] = intersection_line(planes[i - 1], planes[j - 1], planes, points)
-        return lines[key]
-
-    def far_end(segment, junction):
-        return max(segment.endpoints, key=lambda point: np.linalg.norm(point - junction))
-
-    if model_type == "three_plane":
-        l23, l12, l13 = line(2, 3), line(1, 2), line(1, 3)
-        # Eq. 14 / Fig. 19: average the three nearest finite endpoints.
-        junction_guess = np.linalg.solve(np.array([p.normal for p in planes]), [p.offset for p in planes])
-        near = [min(l.endpoints, key=lambda x: np.linalg.norm(x - junction_guess)) for l in (l23, l12, l13)]
-        if max(np.linalg.norm(x - junction_guess) for x in near) > 4:
-            raise ValueError("三条焊缝没有共同端点")
-        junction = np.mean(near, axis=0)
-        definitions = [(far_end(l23, junction), junction, (2, 3)),
-                       (junction, far_end(l12, junction), (1, 2)),
-                       (junction, far_end(l13, junction), (1, 3))]
-    elif model_type == "h_section":
-        axis = line(2, 3)
-        a, b = line_plane(axis, planes[3]), line_plane(axis, p1)
-        d, f = a + h_width_mm / 2 * p2.normal, b + h_width_mm / 2 * p2.normal
-        c, e = d + h_width_mm / 2 * p3.normal, d - h_width_mm / 2 * p3.normal
-        g = f + h_width_mm / 2 * p3.normal
-        m, n = a + (b - a) / 6, b + (a - b) / 6
-        definitions = [(m, n, (2, 3)), (e, c, (4, 4)), (b, f, (1, 3)), (f, g, (1, 1))]
-    else:
-        l23, l24, l12, l13 = line(2, 3), line(2, 4), line(1, 2), line(1, 3)
-        a = closest_intersection(l23, l24)
-        b = np.mean([closest_intersection(l23, l12), closest_intersection(l23, l13),
-                     closest_intersection(l12, l13)], axis=0)
-        h = a - tube_width_mm * p3.normal
-        definitions = [(a, b, (2, 3)), (b, far_end(l12, b), (1, 2)),
-                       (b, far_end(l13, b), (1, 3)), (a, h, (2, 4))]
-    result = []
-    for i, (start, end, pair) in enumerate(definitions, 1):
-        length = float(np.linalg.norm(end - start))
-        if length < 3 or not np.isfinite(length):
-            raise ValueError("焊缝长度退化")
-        if model_type != "three_plane":
-            for plane_index in set(pair):
-                plane = planes[plane_index - 1]
-                surface = points[plane.distances(points) <= 1.0]
-                if len(surface) < 8:
-                    raise ValueError("构件尺寸与点云支撑范围不符，或焊缝存在较大缺口")
-                tree = cKDTree(surface)
-                if tree.query(np.asarray([start, end]))[0].max() > 3.0:
-                    raise ValueError("构件尺寸与点云支撑范围不符，或焊缝存在较大缺口")
-                probes = np.linspace(start, end, min(5000, max(3, int(np.ceil(length / 2)) + 1)))
-                if tree.query(probes)[0].max() > 3.0:
-                    raise ValueError("构件尺寸与点云支撑范围不符，或焊缝存在较大缺口")
-        result.append({"id": f"L{i}", "start": start.tolist(), "end": end.tolist(),
-                       "length_mm": length, "travel_direction": ((end - start) / length).tolist(),
-                       "support_planes": [f"P{j}" for j in pair]})
-    return result, {f"P{i}-P{j}": {"point_count": l.support_count, "band_rmse_mm": l.rmse}
-                    for (i, j), l in lines.items()}
+    result, diagnostics = [], {"spacing_mm": spacing, "max_gap_mm": gap, "rejected_pairs": []}
+    for i, a in enumerate(planes):
+        for j in range(i + 1, len(planes)):
+            b = planes[j]
+            cross = np.cross(a.normal, b.normal)
+            if np.linalg.norm(cross) < np.sin(np.deg2rad(5)):
+                continue
+            tangent = normalized(cross)
+            if tangent[np.argmax(np.abs(tangent))] < 0:
+                tangent = -tangent
+            normals = np.array([a.normal, b.normal])
+            center = (a.center + b.center) / 2
+            origin = center + normals.T @ np.linalg.solve(normals @ normals.T,
+                                                          [a.offset, b.offset] - normals @ center)
+            relative = points - origin
+            along = relative @ tangent
+            radial = np.linalg.norm(np.cross(relative, tangent), axis=1)
+            supports = [along[(labels == k) & (distances[:, k] <= threshold) & (radial <= band)] for k in (i, j)]
+            intervals = [_intervals(group, gap) for group in supports]
+            accepted = False
+            for low_a, high_a, count_a in intervals[0]:
+                for low_b, high_b, count_b in intervals[1]:
+                    low, high = max(low_a, low_b), min(high_a, high_b)
+                    if high - low < min_length:
+                        continue
+                    start, end = origin + low * tangent, origin + high * tangent
+                    result.append({"start": start.tolist(), "end": end.tolist(), "length_mm": float(high - low),
+                                   "travel_direction": tangent.tolist(), "support_planes": [f"P{i + 1}", f"P{j + 1}"],
+                                   "quality": {"support_point_counts": [count_a, count_b], "candidate_type": "supported_plane_intersection"}})
+                    accepted = True
+            if not accepted:
+                diagnostics["rejected_pairs"].append({"planes": [f"P{i + 1}", f"P{j + 1}"],
+                                                      "reason": "双侧交线支撑不足、未接触或长度不足"})
+    result.sort(key=lambda s: tuple(np.round(s["start"] + s["end"], 6)))
+    for i, seam in enumerate(result, 1):
+        seam["id"] = f"L{i}"
+    if not result:
+        diagnostics["reason"] = "未找到有双侧实测支撑的有限相交焊缝"
+    return result, diagnostics
 
 
 def _edge_line(points, start, end, tangent, radial, width, step):
@@ -340,14 +258,14 @@ def plan_seam_pose(seam, planes, points, viewpoint, *, sample_step_mm=2.0,
     distances = np.column_stack([p.distances(points) for p in planes])
     labels = distances.argmin(axis=1)
     radial = normalized(np.cross(tangent, pair[0].normal))
-    if radial @ (viewpoint - (start + end) / 2) < 0:
+    if radial @ (pair[0].center - (start + end) / 2) < 0:
         radial = -radial
     directions = [radial]
     if pair[0] is pair[1]:
         directions.append(-radial)
     else:
         radial = normalized(np.cross(tangent, pair[1].normal))
-        if radial @ (viewpoint - (start + end) / 2) < 0:
+        if radial @ (pair[1].center - (start + end) / 2) < 0:
             radial = -radial
         directions.append(radial)
     edges, support = [], []
@@ -364,6 +282,8 @@ def plan_seam_pose(seam, planes, points, viewpoint, *, sample_step_mm=2.0,
         vectors = [edge - start - np.dot(edge - start, tangent) * tangent for edge in edges]
         zs = normalized(sum(normalized(v) for v in vectors))
         method = "dihedral_edge_bisector"
+    if zs @ (np.asarray(viewpoint) - (start + end) / 2) < 0:
+        zs = -zs
     zg = -normalized(zs - (zs @ tangent) * tangent)
     yg = normalized(np.cross(zg, tangent))  # Correct right-handed version of Eq. 25.
     rotation = np.column_stack((tangent, yg, zg))
