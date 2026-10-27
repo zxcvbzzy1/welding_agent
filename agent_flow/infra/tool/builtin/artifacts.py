@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import mimetypes
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from uuid import UUID
 
 from domain.event import Event
+from domain.run_context import current_run_id
 from domain.runtime_hooks import get_run_context_provider
 from domain.tool import Tool, Tool_respond
 from infra.config import bus, factory
@@ -22,6 +26,7 @@ INLINE_ARTIFACT = Tool(
     description=(
         "创建消息内联产物展示，支持普通消息、图片消息、diff 卡片、"
         "可编辑文档预览、网页预览、点云预览和机械臂轨迹仿真。图片可通过 image.file_path 读取 agent_flow/temp 内的本地图片。"
+        "点云优先使用 point_cloud.file_id（上传文件 ID）或 file_path（允许目录内的本地 PLY 绝对路径），无需启动 HTTP 服务。"
         "当用户命令有产物要求时，调用这个展示产物"
     ),
     field="system",
@@ -97,10 +102,13 @@ INLINE_ARTIFACT = Tool(
                     "title": {"type": "string"}}},
             "point_cloud": {
                 "type": "object",
-                "description": "PLY 点云预览产物参数",
+                "description": "PLY 点云预览，file_id、file_path、url 三选一；优先使用 file_id 或 file_path",
+                "oneOf": [{"required": ["file_id"]}, {"required": ["file_path"]}, {"required": ["url"]}],
                 "properties": {
                     "title": {"type": "string", "description": "点云标题"},
-                    "url": {"type": "string", "description": "PLY 文件 URL"},
+                    "file_id": {"type": "string", "description": "用户上传的 PLY 文件 ID，使用带鉴权的后端下载接口"},
+                    "file_path": {"type": "string", "description": "本地 PLY 绝对路径，最大 100 MiB。仅允许 upload、agent_flow/temp 和 POINT_CLOUD_ALLOWED_ROOTS 配置的目录；文件会复制为持久化产物"},
+                    "url": {"type": "string", "description": "兼容已有相机服务的 HTTP/HTTPS URL；不要填本机文件路径或自行启动临时文件服务"},
                     "source_label": {"type": "string", "description": "预览器显示的文件名"},
                     "mime_type": {"type": "string", "description": "点云文件 MIME 类型"},
                     "point_count": {"type": "integer", "description": "保存的点数量"},
@@ -148,14 +156,17 @@ class InlineArtifactTool:
             raise ValueError(f"不支持的 artifact_type: {artifact_type}")
 
         agent_id = str(arguments.get("agent_id", "")).strip()
-        run_id = str(arguments.get("run_id", "")).strip()
+        run_id = current_run_id.get() or str(arguments.get("run_id", "")).strip()
         if not run_id and agent_id:
             provider = get_run_context_provider()
             if provider is not None:
                 run_id = provider.run_id_for_agent(agent_id)
 
         event_name = f"artifacts.{artifact_type}"
-        artifact = self._build_artifact(arguments, artifact_type)
+        if artifact_type == "point_cloud":
+            artifact = self._build_point_cloud(self._require_section(arguments, artifact_type), run_id=run_id)
+        else:
+            artifact = self._build_artifact(arguments, artifact_type)
         return {
             "run_id": run_id,
             "agent_id": agent_id,
@@ -273,17 +284,39 @@ class InlineArtifactTool:
         from infra.tool.help.robot_simulation import read_simulation, simulation_artifact
         return simulation_artifact(read_simulation(params.get("simulation_id")), params.get("title") or "机械臂轨迹仿真")
 
-    def _build_point_cloud(self, params: dict[str, Any]) -> dict[str, Any]:
-        return {
+    def _build_point_cloud(self, params: dict[str, Any], *, run_id: str = "") -> dict[str, Any]:
+        sources = {key: str(params.get(key) or "").strip() for key in ("file_id", "file_path", "url")}
+        if sum(bool(value) for value in sources.values()) != 1:
+            raise ValueError("point_cloud 必须且只能提供 file_id、file_path、url 中的一个")
+        artifact = {
             "type": "point_cloud",
             "title": params.get("title", ""),
-            "url": params.get("url", ""),
+            "url": sources["url"],
             "source_label": params.get("source_label", ""),
             "mime_type": params.get("mime_type") or "application/octet-stream",
             "point_count": int(params.get("point_count") or 0),
             "metadata": params.get("metadata") or {},
             "editable": False,
         }
+        if sources["file_id"]:
+            try:
+                file_id = str(UUID(sources["file_id"]))
+            except ValueError:
+                raise ValueError("point_cloud.file_id 必须是有效的上传文件 UUID") from None
+            artifact.update(file_id=file_id, url=f"/api/im/files/{file_id}/download")
+        elif sources["file_path"]:
+            from infra.tool.help.point_cloud_artifacts import create_snapshot
+            record = create_snapshot(sources["file_path"], run_id=run_id)
+            artifact.update(point_cloud_id=record["point_cloud_id"],
+                            url=f"/api/im/point-clouds/{record['point_cloud_id']}",
+                            point_count=record["point_count"],
+                            source_label=params.get("source_label") or record["source_label"])
+        else:
+            url = urlsplit(sources["url"])
+            if not ((url.scheme in {"http", "https"} and url.netloc and not url.username and not url.password)
+                    or (not url.scheme and not url.netloc and url.path.startswith("/api/im/"))):
+                raise ValueError("point_cloud.url 必须是 HTTP/HTTPS 或 /api/im/ 地址；本机文件请使用 file_path")
+        return artifact
 
 
 on_tool = On_bind()
@@ -295,7 +328,7 @@ async def inline_artifact(**kwargs) -> Event:
     agent_id = kwargs.get("agent_id", "")
     tool = InlineArtifactTool()
     try:
-        payload = tool.build_event_payload(kwargs)
+        payload = await asyncio.to_thread(tool.build_event_payload, kwargs)
         await bus.publish(Event(payload["event_name"], payload=payload))
     except Exception as exc:
         tool_respond = Tool_respond(

@@ -8,7 +8,8 @@
     "build": "vite build",
     "test:events": "node --test src/utils/eventStream.test.js src/utils/conversationScope.test.js src/utils/chatItems.test.js src/utils/composerPlan.test.js src/utils/workspaceImport.test.js src/utils/toolSelection.test.js src/utils/humanQuestions.test.js checks/trace_client_check.mjs",
     "preview": "vite preview",
-    "test:robot": "node --test src/utils/robotPlayback.test.js"
+    "test:robot": "node --test src/utils/robotPlayback.test.js",
+    "test:pointcloud": "node --test src/utils/pointCloud.test.js"
   },
   "dependencies": {
     "@ant-design/icons-vue": "^7.0.1",
