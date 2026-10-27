@@ -23,6 +23,7 @@ import {
   SaveOutlined,
 } from '@ant-design/icons-vue'
 import { imApi } from '@/api/im'
+import { fetchPointCloud } from '@/api/pointCloud'
 import PointCloudViewer from '@/components/PointCloudViewer.vue'
 import RobotSimulator from '@/components/RobotSimulator.vue'
 import { looksLikeMarkdownDoc, renderMarkdown } from '@/utils/markdown'
@@ -432,7 +433,7 @@ function downloadDocument() {
   downloadArtifact()
 }
 
-function downloadArtifact() {
+async function downloadArtifact() {
   const artifact = props.artifact || {}
   const type = (artifact.type || 'message').toLowerCase()
 
@@ -504,13 +505,21 @@ function downloadArtifact() {
     }
   } else if (type === 'point_cloud') {
     if (artifact.url) {
-      const anchor = document.createElement('a')
-      anchor.href = artifact.url
-      const urlBasename = artifact.url.split('/').pop()?.split('?')[0] || 'point_cloud.ply'
-      anchor.download = artifact.source_label || urlBasename
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
+      let url
+      try {
+        const buffer = await fetchPointCloud(artifact.url)
+        url = URL.createObjectURL(new Blob([buffer], { type: 'application/octet-stream' }))
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = artifact.source_label || 'point_cloud.ply'
+        document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+      } catch (error) {
+        message.error(error?.message || '点云下载失败')
+      } finally {
+        if (url) setTimeout(() => URL.revokeObjectURL(url), 1000)
+      }
     }
   }
 }
