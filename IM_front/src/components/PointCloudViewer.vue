@@ -6,6 +6,7 @@ import plyWorkerUrl from '@loaders.gl/ply/ply-worker.js?url'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { AimOutlined } from '@ant-design/icons-vue'
+import { fetchPointCloud } from '@/api/pointCloud'
 
 const DEFAULT_MAX_PREVIEW_POINTS = 100000
 
@@ -227,18 +228,8 @@ async function loadCloud() {
   abortController = controller
 
   try {
-    const response = await fetch(sourceUrl, { signal: controller.signal })
-    if (!response.ok) {
-      let detail = ''
-      try {
-        const body = await response.json()
-        detail = body?.detail || ''
-      } catch {
-        // File responses are not guaranteed to be JSON.
-      }
-      throw new Error(detail || `点云文件加载失败（HTTP ${response.status}）`)
-    }
-    const buffer = await response.arrayBuffer()
+    const buffer = await fetchPointCloud(sourceUrl, { signal: controller.signal })
+    if (requestId !== activeRequest) return
     const mesh = await parse(buffer, PLYLoader, {
       core: { worker: true, reuseWorkers: false },
       ply: { workerUrl: plyWorkerUrl },
