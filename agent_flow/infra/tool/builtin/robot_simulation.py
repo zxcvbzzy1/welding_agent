@@ -12,10 +12,10 @@ from infra.tool.builtin.artifacts import InlineArtifactTool
 
 ROBOT_SIMULATE_TRAJECTORY = Tool(
     name="robot_simulate_trajectory", field="robot",
-    description=("读取 trajectory_path 指向的本地轨迹 JSON，按 FR5 URDF 离线求解关节运动并自动发布循环播放的内联仿真。"
+    description=("读取 trajectory_path 指向的本地轨迹 JSON，通过 FastAPI/MoveIt 求解并检查 FR5 关节运动并自动发布循环播放的内联仿真。"
                  "输入是文件路径而非 JSON 内容；兼容 point_cloud_weld_seams 的 trajectory_path。"
                  "默认展示全部焊缝，可在卡片内选择 seam_id。不可达点标记失败，不连接或控制真实机械臂。"
-                 "tcp_offset_pose 是法兰到焊枪 TCP 的安装位姿，mm/degree；省略时以法兰为 TCP 并明确提示。"),
+                 "tcp_offset_pose 是法兰到焊枪 TCP 的安装位姿，mm/degree；省略时使用临时仿真偏移 [0,0,200,0,0,0]，不代表实际标定。"),
     input_schema={"type": "object", "additionalProperties": False, "required": ["trajectory_path"],
         "properties": {
             "trajectory_path": {"type": "string", "description": "服务器上 schema_version=1 轨迹 JSON 文件路径"},
@@ -46,6 +46,6 @@ async def robot_simulate_trajectory(**kwargs):
         raise
     except Exception as exc:
         return factory.tool("robot_simulate_trajectory").failed(Tool_respond(
-            agent_id=agent_id, name="robot_simulate_trajectory", success=False, respond=f"离线仿真失败: {exc}"))
+            agent_id=agent_id, name="robot_simulate_trajectory", success=False, respond=f"轨迹仿真失败: {exc}"))
     return factory.tool("robot_simulate_trajectory").succeeded(Tool_respond(
         agent_id=agent_id, name="robot_simulate_trajectory", success=True, respond=payload))

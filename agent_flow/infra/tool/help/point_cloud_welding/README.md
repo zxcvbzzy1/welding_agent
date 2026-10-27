@@ -1,3 +1,7 @@
+> 跨机器输入已支持：帮助层会上传工具机器上可读的本地文件，下载提取结果并清理临时上传。服务地址使用 `WELD_SERVICE_URL=http://100.82.31.1:18800`；手动启动及 curl 上传示例见工作区 `docs/MANUAL_START.md`。只传一个两边均读不到的第三台机器路径仍不可用，需要先上传文件内容。
+
+> 当前工具入口已改为调用 FastAPI 服务，算法实现位于 `FR_Weld_Seam_Planning_ws/service/weld_service/point_cloud/`。设置 `WELD_SERVICE_URL` 和共享产物目录后使用；完整部署及 API 见工作区 `docs/FASTAPI_SERVICE.md`。下文方法说明继续适用，旧离线仿真说明以新版服务文档为准。
+
 # 通用平面相交焊缝提取
 
 采用 Geng 等论文 *A novel seam extraction and path planning method for robotic welding of medium-thickness plate structural parts* 的核心方法：局部近邻 RANSAC、多平面质心精拟合和二面角姿态计算。DOI: https://doi.org/10.1016/j.rcim.2022.102433；论文原文位于 `docs/`。
@@ -55,9 +59,9 @@ PYTHONPATH=agent_flow /Users/zxcvbzzy1/miniconda3/envs/test_for_master/bin/pytho
 {"trajectory_path":"/path/trajectory.json","speed_mm_s":20}
 ```
 
-可选 `tcp_offset_pose=[x,y,z,rx,ry,rz]` 是法兰到焊枪 TCP 的安装变换，mm/degree、Rz Ry Rx；省略时明确按法兰作为 TCP，不能代表已标定焊枪。可选 `seam_id` 限制本次产物仅包含某条焊缝。
+可选 `tcp_offset_pose=[x,y,z,rx,ry,rz]` 是法兰到焊枪 TCP 的安装变换，mm/degree、Rz Ry Rx；省略时使用临时 200 mm 工具 Z 偏移，不能代表已标定焊枪。可选 `seam_id` 限制本次产物仅包含某条焊缝。
 
-输入限制为 64 MiB、总计 50,000 个轨迹点；位姿必须为基座坐标、毫米/度。逆解同时检查位置 ≤1 mm、姿态 ≤1° 和 URDF 关节限位。不可达点保留为红色诊断点，不跨越失败点播放；缺少姿态时仅显示几何。关节变化超过 90° 的跳变拆为新的连续段。仿真不调用真实机器人 SDK，不做碰撞或动力学校验。
+输入限制为 64 MiB、总计 50,000 个轨迹点；位姿必须为基座坐标、毫米/度。逆解同时检查位置 ≤1 mm、姿态 ≤1° 和 URDF 关节限位。不可达点保留为红色诊断点，不跨越失败点播放；缺少姿态时仅显示几何。关节变化超过 90° 的跳变拆为新的连续段。仿真不调用真实机器人 SDK；由容器内 MoveIt 检查自碰撞及可选工件碰撞，并进行关节速度／加速度约束的时间参数化。
 
 快照保存于 `agent_flow/store/robot_simulations`，可用 `ROBOT_SIMULATION_ROOT` 覆盖（多 worker 须共享该目录）。快照包括输入副本与 SHA-256、分段关节序列和诊断；改动或删除原始轨迹不改变已有产物。事件中仅传仿真 ID、摘要和 URL；`GET /api/im/robot-simulations/{simulation_id}` 要求登录且身份匹配原始运行的 `memory_scope.user_id`。API 不接受本地文件路径。
 
