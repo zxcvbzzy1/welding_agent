@@ -1,6 +1,7 @@
 """Point-cloud seam tool declaration and event binding, following system.py."""
 
 import asyncio
+from threading import Event as ThreadEvent
 
 from domain.event import Event
 from domain.tool import Tool, Tool_respond
@@ -61,11 +62,15 @@ factory._build_and_register_list([POINT_CLOUD_WELD_SEAMS], bus)
 @on_tool.on(factory.tool("point_cloud_weld_seams").called())
 async def point_cloud_weld_seams(**kwargs) -> Event:
     agent_id = kwargs.get("agent_id", "")
+    cancel = ThreadEvent()
     try:
         from infra.tool.help.point_cloud_welding import extract_weld_seams
 
         arguments = {key: kwargs[key] for key in POINT_CLOUD_WELD_SEAMS.input_schema["properties"] if key in kwargs}
-        response = await asyncio.to_thread(extract_weld_seams, **arguments)
+        response = await asyncio.to_thread(extract_weld_seams, cancel=cancel, **arguments)
+    except asyncio.CancelledError:
+        cancel.set()
+        raise
     except Exception as exc:
         return factory.tool("point_cloud_weld_seams").failed(Tool_respond(
             agent_id=agent_id, name="point_cloud_weld_seams", success=False,

@@ -1,10 +1,7 @@
-"""Offline implementation of Geng et al., RCIM 79 (2023), 102433.
-
-Importing this package does not load scientific libraries or a robot SDK.
-"""
+"""Compatibility entry point: computation belongs to the FastAPI service."""
 
 
 def extract_weld_seams(**arguments):
-    from .pipeline import extract_weld_seams as extract
-
-    return extract(**arguments)
+    from ..weld_service_client import run_job
+    cancel = arguments.pop("cancel", None)
+    return run_job("/api/v1/extractions/point-cloud", arguments, cancel=cancel)
