@@ -62,6 +62,7 @@ class IMAgentService:
         if agent_type not in {"executor", "planner"}:
             raise ValueError("agent_type 必须是 executor 或 planner")
         requested_metadata = metadata or {}
+        self._bridge.agents.validate_model_kind(agent_type, requested_metadata)
         agent_kind = requested_metadata.get("agent_kind") or "native"
         if agent_kind != "native":
             raise ValueError("当前仅支持 native Agent")
@@ -163,6 +164,7 @@ class IMAgentService:
         if agent_kind != "native":
             raise ValueError("当前仅支持 native Agent")
         agent_type = record.get("agent_type")
+        self._bridge.agents.validate_model_kind(agent_type, {**existing_meta, **(metadata or {})})
 
         # 工具变更仅对 executor 生效。
         if (

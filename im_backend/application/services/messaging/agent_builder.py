@@ -78,6 +78,7 @@ class AgentBuilderService:
             "## 需要收集的字段\n"
             "- name：Agent 名称（必填）。\n"
             f"- agent_type：{list(_AGENT_TYPES)}。\n"
+            "- model_kind：llm 或 vlm。vlm 支持图像与文字输入，仅能用于 executor；planner 必须为 llm。\n"
             "- description：能力描述（擅长方向 / 可承担任务）。\n"
             "- role_prompt：角色 system prompt。\n"
             "- workdir：工作目录，留空表示用后端默认。\n"
@@ -94,7 +95,7 @@ class AgentBuilderService:
             "4. JSON 之外的正文是给用户看的引导语，不要把 JSON 内容重复进正文。\n\n"
             "## 当前草稿（供你参考，可继续修改）\n"
             f"```json\n{json.dumps(draft, ensure_ascii=False)}\n```\n\n"
-            "草稿 JSON 的字段：name, agent_type, description, role_prompt, workdir, "
+            "草稿 JSON 的字段：name, agent_type, model_kind, description, role_prompt, workdir, "
             "tool_names(list), tool_fields(list), tags(list), ready(bool)。"
         )
 
@@ -128,6 +129,8 @@ class AgentBuilderService:
                 merged[key] = parsed[key]
         if parsed.get("agent_type") in _AGENT_TYPES:
             merged["agent_type"] = parsed["agent_type"]
+        if parsed.get('model_kind') in {'llm', 'vlm'}:
+            merged['model_kind'] = parsed['model_kind']
         for key in ("tool_names", "tool_fields"):
             value = parsed.get(key)
             if isinstance(value, list):
@@ -148,6 +151,7 @@ class AgentBuilderService:
         return {
             "name": str(draft.get("name") or ""),
             "agent_type": agent_type,
+            "model_kind": 'vlm' if agent_type == 'executor' and draft.get('model_kind') == 'vlm' else 'llm',
             "description": str(draft.get("description") or ""),
             "role_prompt": str(draft.get("role_prompt") or ""),
             "workdir": str(draft.get("workdir") or ""),

@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import asyncio
 import logging
+import json
+import mimetypes
 import threading
 import time
 from typing import BinaryIO
@@ -257,11 +259,60 @@ class FileService:
                 'conversation_id': message.get('conversation_id', ''), 'room_id': message.get('room_id', '')})
             record = self.store.find_one('im_files', {'file_id': file_id, 'status': 'attached'}) if relation else None
             if record and self.storage.path(record).is_file():
-                paths.append(record['storage_path'])
+                if not self._image_part(part, record):
+                    paths.append(record['storage_path'])
         text = message_text(message)
         if reference and len(text) > 2000:
             text = text[:2000] + '\n…（引用内容已截断）'
-        return '\n\n'.join(filter(None, [text, '\n'.join(paths)]))
+        images = self.image_references(message, include_references=False)
+        image_text = '图片引用：' + json.dumps(images, ensure_ascii=False) if images else ''
+        return '\n\n'.join(filter(None, [text, '\n'.join(paths), image_text]))
+
+    @staticmethod
+    def _image_part(part, record=None):
+        record = record or {}
+        mime = record.get('mime_type') or part.get('mime_type') or ''
+        guessed = mimetypes.guess_type(record.get('original_name') or part.get('name') or '')[0] or ''
+        return mime.startswith('image/') or guessed.startswith('image/')
+
+    def image_references(self, message, *, include_references=True):
+        """Image sources are references, including in ordinary text-only history."""
+        messages = [message]
+        if include_references:
+            for key in ('reply_to', 'quote_of'):
+                ref = self.store.find_one('im_messages', {'message_id': message.get(key)}) if message.get(key) else None
+                if ref and all(ref.get(k, '') == message.get(k, '') for k in ('room_id', 'conversation_id')):
+                    messages.append(ref)
+        sources = []
+        for item in messages:
+            for part in item.get('content_parts', []):
+                if part.get('type') == 'file' and part.get('file_id'):
+                    record = self.store.find_one('im_files', {'file_id': part['file_id']})
+                    if self._image_part(part, record):
+                        sources.append({'kind': 'upload', 'value': part['file_id']})
+                else:
+                    image = (part.get('metadata') or {}).get('artifact', part)
+                    if not isinstance(image, dict) or image.get('type') != 'image':
+                        continue
+                    path = image.get('file_path') or (image.get('metadata') or {}).get('file_path')
+                    if path:
+                        sources.append({'kind': 'path', 'value': path})
+                    elif image.get('url', '').startswith(('https://', 'http://')):
+                        sources.append({'kind': 'url', 'value': image['url']})
+        return [dict(pair) for pair in dict.fromkeys(tuple(source.items()) for source in sources)]
+
+    def resolve_image(self, file_id, source_message):
+        relation = self.store.find_one('im_conversation_files', {
+            'file_id': file_id, 'conversation_id': source_message.get('conversation_id', ''),
+            'room_id': source_message.get('room_id', ''),
+        })
+        if relation is None:
+            raise FileAccessError('图片不属于当前会话')
+        record = self.get(file_id)
+        self._available(record)
+        if record['status'] != 'attached':
+            raise FileAccessError('图片尚未关联到消息')
+        return self.storage.path(record)
 
     async def delete(self, file_id: str, user_id: str) -> dict:
         record = await asyncio.to_thread(self._delete_sync, file_id, user_id)

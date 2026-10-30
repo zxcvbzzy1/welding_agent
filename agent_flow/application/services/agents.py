@@ -5,10 +5,16 @@ from typing import Any
 
 from domain.agent.plan.planAgent import PlanAgent
 from domain.agent_base import AgentBase
+from domain.agent.vlm import Vlm
 from domain.context.context import ContextEngine
+from domain.run_context import current_run_id
+from domain.runtime_hooks import get_run_context_provider
 from infra.LLM.LLM_infra import LLM_Client
 from infra.db.mongodb import DocumentStore
 from infra.context.runtime import bind_context_runtime
+from infra.LLM.images import ImageRuntime
+from infra.config import vlm_client
+from infra.tool.builtin.delegate_agent import DelegateAgentTool
 
 from application.services.contexts import ContextService
 from application.services.events import EventStreamService
@@ -68,11 +74,15 @@ class AgentFactoryService:
         context_service: ContextService,
         llm_client: LLM_Client,
         events: EventStreamService | None = None,
+        *, vision_client=None,
     ) -> None:
         self._store = store
         self._contexts = context_service
         self._llm = llm_client
         self._events = events
+        self._vision_llm = vision_client if vision_client is not None else vlm_client
+        self.image_runtime = ImageRuntime(self._vision_llm, resolve_upload=self.resolve_image_upload)
+        self._delegate_tool = self._build_delegate_tool()
         self._agents: dict[str, AgentBase | PlanAgent] = {}
         self.ensure_default_agents()
 
@@ -131,6 +141,7 @@ class AgentFactoryService:
             raise ValueError("agent_type 必须是 planner 或 executor")
         metadata = metadata or {}
         self._ensure_native_metadata(metadata)
+        self.validate_model_kind(agent_type, metadata)
         self._contexts.get_engine(context_id)
         agent_id = agent_id or str(uuid.uuid4())
         record = {
@@ -173,6 +184,7 @@ class AgentFactoryService:
             updates["role_prompt"] = role_prompt
         if metadata is not None:
             self._ensure_native_metadata(metadata)
+            self.validate_model_kind(record['agent_type'], metadata)
             updates["metadata"] = metadata
         if updates:
             self._store.update_one("agents", {"agent_id": agent_id}, updates)
@@ -194,9 +206,11 @@ class AgentFactoryService:
         agent_metadata = {
             "description": getattr(agent, "description", ""),
             "imported_agent_class": type(agent).__name__,
+            "model_kind": "vlm" if isinstance(agent, Vlm) else "llm",
             **(metadata or {}),
         }
         self._ensure_native_metadata(agent_metadata)
+        self.validate_model_kind(agent_type, agent_metadata)
 
         context_id = context_id or f"{agent.id}_context"
         context_kind = "planner" if agent_type == "planner" else "executor"
@@ -217,6 +231,10 @@ class AgentFactoryService:
         }
         self._store.update_one("agents", {"agent_id": agent.id}, record, upsert=True)
         agent._llm = self._build_llm(record)
+        self.bind_agent_capabilities(agent)
+        if isinstance(agent._llm, StreamingObservableLLMClient):
+            agent._llm.agent = agent
+            agent._llm.context_engine = agent.context_engine
         self._agents[agent.id] = agent
         return record
 
@@ -321,8 +339,6 @@ class AgentFactoryService:
         if agent_kind != "native":
             raise ValueError(f"不支持的 Agent 类型: {agent_kind}；当前仅支持 native")
         llm = self._build_llm(record)
-        if isinstance(llm, StreamingObservableLLMClient):
-            llm.context_engine = engine
         if record.get("agent_type") == "planner":
             agent = PlanAgent(
                 id=record["agent_id"],
@@ -331,7 +347,8 @@ class AgentFactoryService:
                 context=engine,
             )
         else:
-            agent = APIExecutorAgent(
+            agent_class = Vlm if (record.get('metadata') or {}).get('model_kind', 'llm') == 'vlm' else APIExecutorAgent
+            agent = agent_class(
                 id=record["agent_id"],
                 name=record["name"],
                 llm=llm,
@@ -341,6 +358,7 @@ class AgentFactoryService:
             )
 
         metadata = record.get("metadata") or {}
+        self.bind_agent_capabilities(agent)
         description = metadata.get("description")
         if description:
             agent.inject_attribute(description=description)
@@ -349,19 +367,66 @@ class AgentFactoryService:
         bind_context_runtime(agent, publish=publish if getattr(self, '_events', None) is not None else None)
         if isinstance(llm, StreamingObservableLLMClient):
             llm.agent = agent
+            llm.context_engine = agent.context_engine
         return agent
 
     def _build_llm(self, record: dict[str, Any]):
+        self.validate_model_kind(record.get('agent_type', 'executor'), record.get('metadata') or {})
+        base = self._vision_llm if (record.get('metadata') or {}).get('model_kind', 'llm') == 'vlm' else self._llm
         if self._events is None:
-            return self._llm
+            return base
         return StreamingObservableLLMClient(
-            self._llm,
+            base,
             self._events,
             agent_id=record["agent_id"],
             agent_name=record["name"],
             agent_type=record.get("agent_type", "executor"),
             context_id=record.get('context_id', ''),
         )
+
+    def bind_agent_capabilities(self, agent):
+        if not hasattr(self, '_delegate_tool'):
+            self._delegate_tool = self._build_delegate_tool()
+        agent.delegate_tool = self._delegate_tool
+        if isinstance(agent, Vlm):
+            agent._image_loader = self.image_runtime.load
+            agent._image_scope = self.image_runtime.scope
+
+    def _build_delegate_tool(self):
+        events = getattr(self, '_events', None)
+
+        # Capture only the event service; the tool never receives this factory.
+        def wrap_llm(base_llm, child, parent):
+            llm = StreamingObservableLLMClient(base_llm, events,
+                agent_id=child.id, agent_name=child.name, agent_type='executor', context_engine=child.context_engine)
+            llm.agent = child
+            llm.trace_metadata = {'temporary': True, 'parent_agent_id': parent.id}
+            return llm
+
+        async def publish_context(name, payload):
+            run_id = current_run_id.get()
+            if not run_id:
+                provider = get_run_context_provider()
+                run_id = provider.run_id_for_agent(payload['agent_id']) if provider is not None else ''
+            await events.publish_context_event(run_id, name, payload)
+
+        return DelegateAgentTool(
+            text_llm=getattr(self, '_llm', None), vision_llm=getattr(self, '_vision_llm', None),
+            image_runtime=getattr(self, 'image_runtime', None),
+            wrap_llm=wrap_llm if events is not None else None,
+            publish_context=publish_context if events is not None else None,
+        )
+
+    def resolve_image_upload(self, file_id):
+        raise ValueError('当前入口不支持聊天上传文件，请使用工作目录图片路径或公网 URL')
+
+    @staticmethod
+    def validate_model_kind(agent_type, metadata):
+        kind = metadata.get('model_kind', 'llm')
+        if kind not in {'llm', 'vlm'}:
+            raise ValueError('model_kind 必须是 llm 或 vlm')
+        if kind == 'vlm' and agent_type != 'executor':
+            raise ValueError('VLM 仅支持 Executor')
 
     @staticmethod
     def _ensure_native_metadata(metadata: dict[str, Any]) -> None:

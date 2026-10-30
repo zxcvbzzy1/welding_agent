@@ -160,6 +160,7 @@ const roomForm = reactive({
 const agentForm = reactive({
   name: '',
   agent_type: 'executor',
+  model_kind: 'llm',
   description: '',
   role_prompt: '',
   workdir: '',
@@ -167,6 +168,9 @@ const agentForm = reactive({
   tool_names: [],
   tool_fields: [],
   tags: [],
+})
+watch(() => agentForm.agent_type, (type) => {
+  if (type === 'planner') agentForm.model_kind = 'llm'
 })
 // 对话式创建：本地维护聊天记录与草稿，最终应用到 agentForm 后仍走原有 createAgent。
 const agentCreateTab = ref('form')
@@ -535,6 +539,7 @@ async function createRoom() {
 function resetAgentForm() {
   agentForm.name = ''
   agentForm.agent_type = 'executor'
+  agentForm.model_kind = 'llm'
   agentForm.description = ''
   agentForm.role_prompt = ''
   agentForm.workdir = ''
@@ -566,6 +571,7 @@ async function createAgent() {
       tool_names: useToolPicker ? [...agentForm.tool_names] : [],
       tool_fields: useToolPicker ? [...agentForm.tool_fields] : [],
       metadata: {
+        model_kind: agentForm.agent_type === 'planner' ? 'llm' : agentForm.model_kind,
         description: agentForm.description,
         capabilities: agentForm.description ? [agentForm.description] : [],
         tags: [...agentForm.tags],
@@ -611,6 +617,7 @@ async function openEditAgent(agent) {
   editingAgentId.value = agent.agent_id
   agentForm.name = agent.name || ''
   agentForm.agent_type = agent.agent_type || 'executor'
+  agentForm.model_kind = meta.model_kind || 'llm'
   agentForm.description = meta.description || ''
   agentForm.role_prompt = agent.role_prompt || ''
   agentForm.workdir = meta.workdir || ''
@@ -639,6 +646,7 @@ async function saveAgentEdit() {
       tool_names: useToolPicker ? [...agentForm.tool_names] : [],
       tool_fields: useToolPicker ? [...agentForm.tool_fields] : [],
       metadata: {
+        model_kind: agentForm.agent_type === 'planner' ? 'llm' : agentForm.model_kind,
         description: agentForm.description,
         capabilities: agentForm.description ? [agentForm.description] : [],
         tags: [...agentForm.tags],
@@ -676,6 +684,7 @@ function applyDraftToForm() {
   const d = builderDraft.value || {}
   agentForm.name = d.name || ''
   agentForm.agent_type = d.agent_type || 'executor'
+  agentForm.model_kind = agentForm.agent_type === 'planner' ? 'llm' : (d.model_kind || 'llm')
   agentForm.description = d.description || ''
   agentForm.role_prompt = d.role_prompt || ''
   agentForm.workdir = d.workdir || ''
@@ -2096,6 +2105,13 @@ onUnmounted(() => {
           />
           <small v-if="isEditingAgent" class="form-lock-hint">编辑时不可更改类型</small>
         </a-form-item>
+        <a-form-item label="模型能力">
+          <a-segmented
+            v-model:value="agentForm.model_kind"
+            :options="[{ label: 'LLM', value: 'llm' }, { label: 'VLM', value: 'vlm', disabled: agentForm.agent_type === 'planner' }]"
+          />
+          <small class="form-lock-hint">{{ agentForm.agent_type === 'planner' ? 'Planner 使用 LLM' : 'VLM 支持文字与图片输入' }}</small>
+        </a-form-item>
         <a-form-item label="工作目录">
           <a-input v-model:value="agentForm.workdir" placeholder="留空则使用后端默认工作目录" />
         </a-form-item>
@@ -2166,6 +2182,7 @@ onUnmounted(() => {
               <ul>
                 <li>名称：{{ builderDraft.name || '（待定）' }}</li>
                 <li>类型：{{ builderDraft.agent_type }}</li>
+                <li>模型能力：{{ (builderDraft.model_kind || 'llm').toUpperCase() }}</li>
                 <li v-if="builderDraft.description">能力：{{ builderDraft.description }}</li>
                 <li v-if="builderDraft.tags?.length">标签：{{ builderDraft.tags.join('、') }}</li>
                 <li v-if="builderDraft.tool_names?.length">工具：{{ builderDraft.tool_names.join('、') }}</li>

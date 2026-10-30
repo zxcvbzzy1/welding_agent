@@ -7,6 +7,7 @@ from application.services.agents import AgentFactoryService
 from application.services.memory_runtime import RunMemoryCoordinator
 from domain.run_context import current_run_id
 from domain.context.providers import ContextProvider
+from domain.agent.vlm import Vlm
 
 
 class RunWorkspaceProvider(ContextProvider):
@@ -34,7 +35,22 @@ class IMAgentFactoryService(AgentFactoryService):
         if workdir:
             agent.inject_attribute(work_path=workdir)
             agent.context_engine._providers.insert(0, RunWorkspaceProvider(workdir))
+        if isinstance(agent, Vlm) and getattr(self, 'files', None) is not None:
+            source = self._image_source_message()
+            if source:
+                agent.initial_images = self.files.image_references(source)
         return agent
+
+    def _image_source_message(self):
+        run = self._store.find_one('runs', {'run_id': current_run_id.get()}) or {}
+        source_id = run.get('source_message_id') or (run.get('message_id') if run.get('kind') == 'dm_reply' else None)
+        return self._store.find_one('im_messages', {'message_id': source_id}) if source_id else None
+
+    def resolve_image_upload(self, file_id):
+        source = self._image_source_message()
+        if source is None or getattr(self, 'files', None) is None:
+            raise ValueError('当前任务没有可访问的聊天图片来源')
+        return self.files.resolve_image(file_id, source)
 
 
 class IMRunMemoryCoordinator(RunMemoryCoordinator):

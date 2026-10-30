@@ -23,6 +23,8 @@ class PlannerFinalReplyWriter:
         if event.get("name") not in {"planner.final", "agent.final"}:
             return
         payload = event.get("payload") or {}
+        if payload.get('temporary'):
+            return
         run_id = event.get("run_id") or payload.get("run_id") or ""
         final = (payload.get("final") or "").strip()
         if not run_id or not final:

@@ -597,3 +597,65 @@ infra/
 运行状态仍以 Mongo 为准，RunStateCache 保持先写 DB、再失效/回填缓存。
 SSE 同时支持 `last_id` 查询参数，游标为带代次的不透明字符串；详情见 [事件缓存与归档](../im_backend/README.md#事件缓存与异步归档v3)。
 部署、续传和验证方式见 [IM 后端说明](../im_backend/README.md#redis-运行时第一阶段)。
+
+## VLM 与临时委托
+
+创建或编辑 Executor 时可选择 `LLM / VLM`，保存为 `metadata.model_kind`；旧记录默认 `llm`，Planner 仅支持 LLM。VLM 使用 `deepseek-flash` 和已有的 `LLM_Client`，配置 `DEEPSEEK_API`，可用 `DEEPSEEK_BASE_URL` 覆盖默认地址 `https://api.deepseek.com`。普通 LLM 继续使用原有配置。
+
+图片沿用聊天附件上传和历史文件选择入口。当前消息、回复/引用消息中的图片自动加载；普通聊天历史只保留图片引用，VLM 可调用 `load_images` 再次查看。工作目录内新生成的图片可直接按路径加载，本次不自动登记进历史文件列表。
+
+两个内置工具的调用参数：
+
+```json
+{"tool_name":"delegate_agent","arguments":{"agent_type":"vlm","task":"提取图片中的表格，保留列名","images":[{"kind":"upload","value":"本地聊天文件ID"}]}}
+```
+
+```json
+{"tool_name":"load_images","arguments":{"images":[{"kind":"path","value":"output/chart.png"},{"kind":"url","value":"https://example.com/image.png"}]}}
+```
+
+`delegate_agent` 的 `agent_type` 支持 `react`、`vlm`，`images` 可省略；`react` 不接受图片。临时子智能体使用独立上下文和记忆，只接收明确传入的任务与图片，不继承聊天历史。其工具限于默认模板工具与父智能体工具的交集，禁止再次委托；VLM 另外具备 `load_images`。子智能体结果作为工具反馈返回，运行事件归入父任务，不创建独立聊天回复或持久化 Agent。
+
+所有图片均先上传至 DeepSeek Files API，推理只传 `file_id`，Base64 不进入提示词、记忆和事件。上传支持 JPEG、PNG、GIF、WebP，单图上限 64 MiB；聊天附件本身的 100 MiB 上传上限不代表模型可读取同样大小的图片。相同任务及其子智能体按图片内容复用上传结果，结束、失败或取消时清理远端文件，并设置 24 小时过期兜底。图像 token 按每图 1024 tokens 的保守上界估算，单独展示。
+
+独立脚本可显式注入图片能力（需像现有脚本一样设置 `agent_flow` 导入路径）：
+
+```python
+import asyncio
+
+from domain.agent.vlm import Vlm
+from infra.config import vlm_client
+from infra.LLM.images import ImageRuntime
+from infra.tool.builtin import system, ask_user, delegate_agent
+import infra.tool.tools_attach_methods
+from infra.context.runtime import bind_context_runtime
+
+images = ImageRuntime(vlm_client)
+agent = Vlm(id="vision", name="图像解析", llm=vlm_client,
+            work_path="/absolute/workspace",
+            image_loader=images.load, image_scope=images.scope)
+bind_context_runtime(agent)
+async def main():
+    await agent.start("描述图中的趋势", images=[{"kind": "path", "value": "chart.png"}])
+
+asyncio.run(main())
+```
+
+这里的 `upload` 引用由 IM 任务按当前会话解析；独立脚本使用工作目录路径或公网 URL。
+
+委托的创建、工具范围限制、执行和清理统一实现在 `infra/tool/builtin/delegate_agent.py` 的 `DelegateAgentTool` 中。内置 handler 默认使用 `infra.config` 的模型客户端，独立脚本无需创建应用层工厂；也可显式配置：
+
+```python
+from infra.config import llm_client, vlm_client
+from infra.tool.builtin.delegate_agent import DelegateAgentTool
+
+agent.delegate_tool = DelegateAgentTool(
+    text_llm=llm_client, vision_llm=vlm_client, image_runtime=images,
+)
+```
+
+默认委托工具会复用当前任务中使用同一视觉客户端的图片会话；客户端不同则使用自己的会话，避免混用不同账号的远端文件 ID。
+
+IM/API 入口由 `AgentFactoryService` 注入模型、带文件权限解析能力的图片服务，以及可选的 `wrap_llm(base_llm, child, parent)`、`publish_context(name, payload)` 回调。前者接入模型流，后者接入上下文用量与压缩事件；工具模块不导入 application，也不调用工厂的私有方法。独立脚本未注入回调时仍可执行委托并获得结果。
+
+子智能体继承父任务的 `run_id`、当前 `execution_id` 和取消机制，使用独立 `agent_id`，通过 `parent_agent_id`、`temporary=true` 关联轨迹。内部工具结果只回灌子智能体，委托结束后只将最终结果回灌父智能体；不新增子 run 或子 execution，也不持久化恢复子智能体的完整 states/memory。

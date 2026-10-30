@@ -39,6 +39,7 @@ class StreamingObservableLLMClient:
         self.context_window = getattr(base_llm, 'context_window', None)
         self.context_engine, self.context_id = context_engine, context_id
         self.agent = None
+        self.trace_metadata = {}
 
     async def chat(self, messages: list, *, max_tokens=None, purpose='') -> str:
         await ensure_execution_active()
@@ -64,8 +65,15 @@ class StreamingObservableLLMClient:
                 await self.context_engine.prepare(self.context_engine.last_state)
                 refreshed = self.context_engine.refresh_tool_sections()
                 for message in messages:
-                    if message.get('role') == 'user' and message.get('content') == previous:
-                        message['content'] = refreshed
+                    if message.get('role') == 'user':
+                        if message.get('content') == previous:
+                            message['content'] = refreshed
+                        elif isinstance(message.get('content'), list):
+                            message['content'] = [
+                                {**block, 'text': refreshed}
+                                if block.get('type') == 'text' and block.get('text') == previous else block
+                                for block in message['content']
+                            ]
                 usage = self.context_snapshot(messages, call_role)
             if run_id:
                 await self._streams.publish_context_event(run_id, 'context.usage.updated', usage)
@@ -118,8 +126,13 @@ class StreamingObservableLLMClient:
     def context_snapshot(self, messages, phase):
         counter = EstimatedTokenCounter()
         components, tools = [], []
+        image_count = 0
         for message_index, message in enumerate(messages):
-            content = str(message.get('content', ''))
+            raw = message.get('content', '')
+            content = ('\n\n'.join(block.get('text', '') for block in raw if block.get('type') == 'text')
+                       if isinstance(raw, list) else str(raw))
+            if isinstance(raw, list):
+                image_count += sum(block.get('type') in {'file', 'image_url'} for block in raw)
             if (self.context_engine is not None and message.get('role') == 'user' and
                     content == self.context_engine.last_text):
                 prefix = ''
@@ -140,12 +153,17 @@ class StreamingObservableLLMClient:
         total = counter.count(serialized)
         components.append({'id': 'message_format', 'name': 'message_format',
                            'tokens': total - sum(c['tokens'] for c in components)})
+        # Files IDs are not the visual token cost. Use the documented conservative
+        # per-image bound separately from the existing text/format estimator.
+        if image_count:
+            components.append({'id': 'images', 'name': 'images', 'tokens': image_count * 1024})
         return {'call_id': str(uuid.uuid4()), 'execution_id': current_execution_id.get(),
                 'agent_id': self.agent_id, 'agent_name': self.agent_name, 'agent_type': self.agent_type,
                 'context_id': self.context_id, 'model': self.model, 'phase': phase, 'created_at': time.time(),
                 'context_window': self.context_window, 'input_tokens': sum(c['tokens'] for c in components),
                 'components': components, 'count_method': counter.name, 'available_tool_names': sorted(set(tools)),
-                'estimated': True}
+                'estimated': True, 'image_count': image_count, 'image_tokens': image_count * 1024,
+                'image_tokens_estimated': bool(image_count), **self.trace_metadata}
 
     def _run_id(self) -> str:
         if self._streams is None:
@@ -164,6 +182,7 @@ class StreamingObservableLLMClient:
                 "agent_id": self.agent_id,
                 "agent_name": self.agent_name,
                 "agent_type": self.agent_type,
+                **self.trace_metadata,
                 **payload,
             },
         )
@@ -177,6 +196,7 @@ class StreamingObservableLLMClient:
                 "agent_id": self.agent_id,
                 "agent_name": self.agent_name,
                 "agent_type": self.agent_type,
+                **self.trace_metadata,
                 **payload,
             },
         )

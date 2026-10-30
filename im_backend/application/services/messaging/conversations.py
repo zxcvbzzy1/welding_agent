@@ -511,7 +511,8 @@ class ConversationService:
                     "message_id": message_id, "agent_id": agent_id, "mode": "direct", "prompt": prompt})
                 started_at = time.time()
                 async with self._bridge.events.execution(run_id, agent):
-                    await agent.start_with_history(prompt)
+                    async with self._bridge.agents.image_runtime.scope():
+                        await agent.start_with_history(prompt)
                 await ensure_execution_active()
                 final = agent.states.get("final", "") or agent.states.get("finish_reason", "")
                 parts = [{"type": "text", "text": final or "Agent 已完成回复"}]

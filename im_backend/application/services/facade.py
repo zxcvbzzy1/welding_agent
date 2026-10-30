@@ -32,6 +32,7 @@ class IMService:
         files=None,
     ) -> None:
         self.files = files
+        bridge.agents.files = files
         self._store = store
         self._bridge = bridge
         self._events = room_events

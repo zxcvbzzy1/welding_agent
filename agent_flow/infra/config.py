@@ -27,6 +27,14 @@ llm_client = LLM_Client(
     max_tokens=131072,
 )
 
+# Vision and Files API must use the same DeepSeek account and endpoint.
+vlm_client = LLM_Client(
+    url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+    model_class="deepseek-flash",
+    model_provider=LLM_Model_Provider.DEEPSEEK,
+    max_tokens=131072,
+)
+
 
 # 以下是独立智能体的手动组装示例，直接修改列表即可调整上下文。
 # 每个智能体单独创建 memory，避免共享工具反馈和对话历史。

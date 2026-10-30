@@ -25,4 +25,5 @@ export const contextModuleNames = {
   user: '当前任务', task: '当前状态', executors: '执行者状态',
   executor_status: '执行者状态', available_executors: '执行者定义', state: '当前状态',
   error: '错误反馈', run_workspace: '工作目录', message_format: '消息格式开销', other_input: '其他输入',
+  images: '图像输入（估算）',
 }

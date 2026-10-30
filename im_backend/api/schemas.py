@@ -160,6 +160,7 @@ class AgentBuilderDraft(BaseModel):
 
     name: str = ""
     agent_type: Literal["executor", "planner"] = "executor"
+    model_kind: Literal["llm", "vlm"] = "llm"
     description: str = ""
     role_prompt: str = ""
     workdir: str = ""

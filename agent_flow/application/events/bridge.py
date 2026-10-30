@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from domain.event import Event
-from domain.run_context import current_run_id
+from domain.run_context import current_run_id, current_agent
 
 from application.events.schemas import tool_event_payload
 from application.services.events import EventStreamService
@@ -94,6 +94,9 @@ class FrontendEventBridge:
             frontend_event_name=frontend_event_name,
             payload=payload,
         )
+        agent = current_agent.get()
+        if agent is not None and getattr(agent, 'is_temporary', False):
+            mirrored.update(temporary=True, parent_agent_id=agent.parent_agent_id)
         await self._streams.publish(run_id, frontend_event_name, mirrored)
 
     def _frontend_tool_event_name(self, internal_name: str) -> str:

@@ -24,11 +24,6 @@ _current_tool_completion = ContextVar('tool_completion', default=None)
 # so the event-binding entrypoint is complete for standalone event-bus users.
 from infra.tool.builtin import point_cloud_welding, robot, robot_simulation  # noqa: E402,F401
 
-# Builtin modules own their Tool declarations and called/human handlers, like
-# system.py. Import both welding tools here as well as in the application loader
-# so the event-binding entrypoint is complete for standalone event-bus users.
-from infra.tool.builtin import point_cloud_welding, robot, robot_simulation  # noqa: E402,F401
-
 
 # 中间件
 
@@ -63,6 +58,16 @@ async def tool_exception_middleware(event: Event, call_next):
                 raise ToolResultDeliveryError(f'工具失败结果回灌失败: {spec.tool_name}: {delivery_exc}') from delivery_exc
     finally:
         _current_tool_completion.reset(token)
+
+
+@on_tool.use()
+async def temporary_tool_permission_middleware(event: Event, call_next):
+    agent = current_agent.get()
+    if event.name.endswith('.called') and agent is not None and hasattr(agent, 'permitted_tool_names'):
+        tool_name = factory.get_spec(event.name).tool_name
+        if tool_name not in agent.permitted_tool_names:
+            raise PermissionError(f'临时智能体不可使用工具: {tool_name}')
+    return await call_next()
 
 
 async def _record_tool_result(agent, tool_name, success, respond, event):

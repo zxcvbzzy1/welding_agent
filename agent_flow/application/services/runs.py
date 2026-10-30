@@ -322,10 +322,11 @@ class RunOrchestrationService:
             with self.runtime.execution_context('orchestration', run_id):
                 await ensure_execution_active()
                 record["memory_snapshot"] = await self.memory_coordinator.prepare(record)
-                if record.get("mode") == "react":
-                    await self._execute_react_run(record)
-                else:
-                    await self._execute_plan_run(record)
+                async with self._agents.image_runtime.scope():
+                    if record.get("mode") == "react":
+                        await self._execute_react_run(record)
+                    else:
+                        await self._execute_plan_run(record)
         except ExecutionRevoked:
             revoked = True
         except asyncio.CancelledError as exc:
