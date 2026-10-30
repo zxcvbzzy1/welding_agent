@@ -1,8 +1,27 @@
 import asyncio
 from dataclasses import dataclass
 import fnmatch
+import logging
 from typing import Callable, Any, Optional
 from domain.event import Event, EventBusPort
+from domain.run_context import current_run_id
+
+
+log = logging.getLogger(__name__)
+
+
+def log_exception_once(logger, exc, message, *args):
+    """Log once, including when the same failure is wrapped with an explicit cause."""
+    cause, seen = exc, set()
+    while cause is not None and id(cause) not in seen:
+        if getattr(cause, '_agent_flow_logged', False):
+            return
+        seen.add(id(cause))
+        cause = cause.__cause__
+    # Only inspect explicit causes: an error while reporting another failure is
+    # a separate error and still needs its own log, despite its __context__.
+    logger.error(message, *args, exc_info=(type(exc), exc, exc.__traceback__))
+    exc._agent_flow_logged = True
 
 
 class EventBus(EventBusPort):
@@ -76,7 +95,8 @@ class EventBus(EventBusPort):
                     result = await self._run_with_middleware(event, handler)
                     results.append(result)
                 except Exception as e:
-                    print(f"[ERROR] handler failed: {e}")
+                    log_exception_once(log, e, 'Event handler failed event=%s run=%s agent=%s',
+                                       event.name, current_run_id.get(), event.unpack().get('agent_id', ''))
                     results.append(e)
             return results
 
@@ -86,14 +106,18 @@ class EventBus(EventBusPort):
                     result = await self._run_with_middleware(event, handler)
                     results.append(result)
                 except Exception as e:
-                    print(f"[ERROR] handler failed: {e}")
+                    log_exception_once(log, e, 'Event handler failed event=%s run=%s agent=%s',
+                                       event.name, current_run_id.get(), event.unpack().get('agent_id', ''))
                     results.append(e)
 
         return results
     
     async def publish_one(self, event: Event) -> Any:
-        """发布事件，只返回第一个 handler 的结果（单处理器场景）。"""
+        """请求调用：返回首个结果，但显式传播任一处理器异常。"""
         results = await self.publish(event)
+        for result in results:
+            if isinstance(result, Exception):
+                raise result
         return results[0] if results else None
 
     def publish_sync(self, event: Event) -> list[Any]:

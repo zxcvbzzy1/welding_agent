@@ -29,6 +29,7 @@ from domain.context.strategy import (
     RecencyStrategy,
     StrategyPipeline,
     TokenBudgetStrategy,
+    CompactHistoryStrategy,
 )
 from domain.context.strategy import FilterByToolStrategy, LatestOnlyStrategy, SummarizeStrategy
 from domain.memory.short.default_short_term_memory import DefaultShortTermMemory
@@ -43,6 +44,47 @@ class ContextService:
         self._store = store
         self._engines: dict[str, ContextEngine] = {}
         self.ensure_default_contexts()
+        self.migrate_runtime_contexts()
+
+    @staticmethod
+    def runtime_providers(provider_config):
+        providers = copy.deepcopy(provider_config)
+        tools = next((p for p in providers if p.get('provider_id') == 'available_tools'), None)
+        if tools is None:
+            tools = {'provider_id': 'available_tools', 'params': {'available_fields': [], 'available_tools': []}}
+            providers.append(tools)
+        tools['enabled'] = True
+        params = tools.get('params') or {}
+        tools['params'] = params
+        if params.get('available_fields') is None and not params.get('available_tools'):
+            # Match _build_provider's legacy implicit default before adding a name.
+            params['available_fields'] = list(ContextService.DEFAULT_FIELDS)
+        names = list(params.get('available_tools') or [])
+        params['available_tools'] = names
+        if 'ask_user' not in names:
+            names.append('ask_user')
+        feedback = [p for p in providers if p.get('provider_id') == 'tool_output']
+        if not feedback:
+            feedback = [{'provider_id': 'tool_output', 'params': {}}]
+            providers.extend(feedback)
+        for provider in feedback:
+            provider['enabled'] = True
+            provider['params'] = {**provider.get('params', {}), 'memory_field': 'tool_respond',
+                'strategy_config': {'pipeline': [{'type': 'compact_history', 'threshold': 100, 'keep_recent': 10}]}}
+        priority = {'available_tools': 0, 'pinned_context': 10, 'long_term_memory': 20,
+                    'skill': 30, 'history': 40, 'user_prompt': 50, 'available_executors': 60,
+                    'tool_output': 70, 'plan_observations': 80, 'executor_status': 90, 'state': 100, 'error': 110}
+        return sorted(providers, key=lambda p: priority.get(p.get('provider_id'), 65))
+
+    def migrate_runtime_contexts(self):
+        for record in self._store.find_many('contexts'):
+            if record.get('kind') not in {'planner', 'executor'} or record.get('runtime_context_version') == 1:
+                continue
+            original = record.get('provider_config', [])
+            changed = self._store.update_one('contexts', {'context_id': record['context_id'], 'provider_config': original},
+                {'provider_config': self.runtime_providers(original), 'runtime_context_version': 1})
+            if changed:
+                self._engines.pop(record['context_id'], None)
 
     def ensure_default_contexts(self) -> None:
         for kind in ("executor", "planner", "step"):
@@ -83,6 +125,7 @@ class ContextService:
                 {"provider_id": "plan_step_prompt", "name": "计划步骤 Prompt", "params": []},
             ],
             "strategies": [
+                {"type": "compact_history", "name": "工具反馈批量压缩", "params": ["threshold", "keep_recent"]},
                 {"type": "full_history", "name": "完整历史", "params": []},
                 {"type": "latest_only", "name": "仅最新", "params": []},
                 {"type": "recency", "name": "最近 N 条", "params": ["keep_last"]},
@@ -146,7 +189,7 @@ class ContextService:
         }
         if kind not in templates:
             raise ValueError(f"未知上下文类型: {kind}")
-        return copy.deepcopy(templates[kind])
+        return self.runtime_providers(templates[kind]) if kind != 'step' else copy.deepcopy(templates[kind])
 
     def create_context(
         self,
@@ -162,7 +205,8 @@ class ContextService:
             "context_id": context_id,
             "kind": kind,
             "name": name,
-            "provider_config": copy.deepcopy(provider_config),
+            "provider_config": self.runtime_providers(provider_config) if kind in {'executor', 'planner'} else copy.deepcopy(provider_config),
+            "runtime_context_version": 1,
         }
         engine = self._build_engine(record)
         self._store.update_one("contexts", {"context_id": context_id}, record, upsert=True)
@@ -189,10 +233,11 @@ class ContextService:
             "context_id": context_id,
             "kind": kind,
             "name": name,
-            "provider_config": provider_config,
+            "provider_config": self.runtime_providers(provider_config) if kind in {'executor', 'planner'} else provider_config,
+            "runtime_context_version": 1,
         }
         self._store.update_one("contexts", {"context_id": context_id}, record, upsert=True)
-        self._engines[context_id] = engine
+        self._engines[context_id] = self._build_engine(record)
         return self._with_overview(record)
 
     def list_contexts(self) -> list[dict[str, Any]]:
@@ -238,6 +283,8 @@ class ContextService:
             raise KeyError(f"上下文不存在: {context_id}")
         if not provider_config:
             raise ValueError("provider_config 不能为空")
+        if record.get('kind') in {'planner', 'executor'}:
+            provider_config = self.runtime_providers(provider_config)
         self._store.update_one(
             "contexts",
             {"context_id": context_id},
@@ -295,6 +342,11 @@ class ContextService:
         # memory 的 "skill" 字段为空时输出为空，对未召回的 Agent（如 planner）完全透明。
         if not any(isinstance(provider, SkillProvider) for provider in providers):
             providers.append(SkillProvider(memory))
+        if record.get('kind') in {'planner', 'executor'}:
+            order = ['available_tools', 'pinned_context', 'long_term_memory', 'skill', 'history',
+                     'user', 'available_executors', 'tool_output', 'plan_observations',
+                     'executors', 'task', 'error']
+            providers.sort(key=lambda p: order.index(p.name) if p.name in order else 6)
         return ContextEngine(providers=providers, memory=memory)
 
     def _build_provider(
@@ -417,6 +469,8 @@ class ContextService:
 
     def _build_strategy_item(self, config: dict[str, Any]):
         strategy_type = config.get("type") if isinstance(config, dict) else None
+        if strategy_type == 'compact_history':
+            return CompactHistoryStrategy(int(config.get('threshold', 100)), int(config.get('keep_recent', 10)))
         if strategy_type == "full_history":
             return FullHistoryStrategy()
         if strategy_type == "latest_only":
@@ -448,6 +502,8 @@ class ContextService:
         }
 
     def _strategy_item_to_config(self, strategy: ContextStrategy) -> dict[str, Any]:
+        if isinstance(strategy, CompactHistoryStrategy):
+            return {'type': 'compact_history', 'threshold': strategy.threshold, 'keep_recent': strategy.keep_recent}
         if isinstance(strategy, FullHistoryStrategy):
             return {"type": "full_history"}
         if isinstance(strategy, LatestOnlyStrategy):

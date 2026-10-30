@@ -100,13 +100,41 @@ class EventStreamService:
                 event['event_id'] = event_id
             await self._broadcast('run', run_id, event, durable=True)
             # Only explicit product notifications are projected, never raw traces.
-            if name.startswith(('artifacts.', 'human.confirmation.')):
+            if name.startswith(('artifacts.', 'human.confirmation.', 'context.')):
                 notification = dict(payload)
                 notification.pop('arguments', None)
                 await self.publish_scope(event['scope_id'], name, notification, context=event, trace=False,
                     event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, event['event_id'] + ':scope')), notify=False)
         await self._notify_subscribers(event)
         return event
+
+    async def publish_context_event(self, run_id, name, payload):
+        if not run_id:
+            return
+        # Different agents update disjoint fields. Never replace another agent's
+        # snapshot or recreate a deleted/terminal run from a late publication.
+        payload = {**payload, 'run_id': run_id, 'updated_at': time.time()}
+        agent_key = payload['agent_id'].encode('utf-8').hex()
+        leaf = 'usage' if name == 'context.usage.updated' else 'compaction'
+        result = await asyncio.to_thread(self._store.update_operators, 'runs',
+            {'run_id': run_id, 'status': {'$in': ['pending', 'running']}},
+            {'$set': {f'context_usage.{agent_key}.{leaf}': payload}})
+        if result is not None:
+            await self.publish(run_id, name, payload)
+
+    async def context_usage(self, run_id):
+        run = await asyncio.to_thread(self._store.find_one, 'runs', {'run_id': run_id})
+        if run is None:
+            raise KeyError('运行不存在')
+        items = []
+        for row in run.get('context_usage', {}).values():
+            compaction = row.get('compaction')
+            if compaction and compaction.get('status') == 'started' and run.get('status') in {'finished', 'failed', 'cancelled'}:
+                compaction = {**compaction, 'status': 'cancelled' if run['status'] == 'cancelled' else 'failed',
+                              'updated_at': run.get('updated_at', time.time())}
+            items.append({**(row.get('usage') or {key: value for key, value in (compaction or {}).items()
+                         if key in {'agent_id', 'agent_name', 'agent_type', 'model'}}), 'compaction': compaction})
+        return items
 
     async def publish_scope(self, scope_id, name, payload, *, context=None, trace=None, event_id=None, notify=True):
         context = context or {}

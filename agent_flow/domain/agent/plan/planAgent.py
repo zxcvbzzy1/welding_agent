@@ -38,7 +38,9 @@ class PlanAgent(AgentBase):
     async def _explore(self, state: dict, prompt: str, *, result_key: str) -> dict[str, Any]:
         """Explore with configured tools, then return the original planning contract."""
         while True:
-            context = self.context_engine.build({**self.states, **state})
+            merged = {**self.states, **state}
+            await self.context_engine.prepare(merged)
+            context = self.context_engine.build(merged)
             raw = await self._llm.chat([
                 {"role": "system", "content": prompt + self._exploration_prompt()},
                 {"role": "user", "content": context},
@@ -71,10 +73,12 @@ class PlanAgent(AgentBase):
   "tool_calls": [{"tool_name": "工具名", "arguments": {}, "reasoning": "调用原因"}],
   "is_finished": false
 }
+遇到需求、设计选择或外部副作用边界的重要歧义，先用 ask_user 向用户澄清，不要自行猜测。
 获得足够信息后，严格按前述原始计划/重规划格式输出。不要把 tool_calls 与 steps/action 混在同一响应中。
 '''
 
     async def summarize_result(self, state: dict) -> str:
+        await self.context_engine.prepare(state)
         context = self.context_engine.build(state)
         messages = [
             {"role": "system", "content": self._build_summary_prompt()},
@@ -180,6 +184,9 @@ replan 时输出：
     }
   ]
 }
+依赖约束：只返回待执行步骤，历史步骤由编排器保留，不要重复返回。
+新 depends_on 只能引用保留且可满足的历史步骤或本次 steps 中的 ID，不能引用被替换的旧 pending ID。
+同一逻辑步骤尽量沿用原 ID。禁止自依赖、循环及悬空引用，不要无条件清空第一步的合法历史依赖。
 """
 
     def _build_summary_prompt(self) -> str:

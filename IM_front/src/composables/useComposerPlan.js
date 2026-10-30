@@ -52,5 +52,5 @@ export function useComposerPlan(im) {
     return value ? { ...value, loading: loader.pending.size > 0, error: loader.errors.size > 0 || snapshotError.value } : null
   })
   onUnmounted(() => { disposed = true; clearTimeout(refreshTimer); loader.clear() })
-  return { plan, retry: () => { loader.load(run.value?.events || [], true); refreshSnapshot() } }
+  return { run, plan, retry: () => { loader.load(run.value?.events || [], true); refreshSnapshot() } }
 }

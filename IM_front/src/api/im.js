@@ -1,6 +1,9 @@
 import http from '@/api/http'
 
 export const imApi = {
+  contextUsage(runId) {
+    return http.get(`/api/im/runs/${runId}/context-usage`)
+  },
   agents() {
     return http.get('/api/im/agents')
   },

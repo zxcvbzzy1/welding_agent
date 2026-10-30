@@ -98,8 +98,10 @@ class AvailableToolsProvider(ContextProvider):
     def get(self, state: dict) -> list[str]:
 
         lines = ["当前可用工具："]
+        self.last_tool_names = []
         for tool in Tool.get_all_tools():
             if tool.field in self._fields or tool.name in self._tools:
+                self.last_tool_names.append(tool.name)
                 lines.append(
                     tool.name + "\n"
                     + tool.description + "\n"
@@ -139,7 +141,7 @@ class ReActToolFeedbackProvider(MemoryProvider):
         items = self._get_items(state)
         if not items:
             return []
-        parts = [f"## ReACT 工具反馈（{len(items)} 条）：思考→行动→观察"]
+        parts = ["## ReACT 工具反馈：思考→行动→观察"]
         for item in items:
             # item.content 已是完整 ReACT 块（由 AgentBase._build_react_block 生成）
             parts.append(f"### {item.source}\n{item.content}")

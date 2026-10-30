@@ -8,6 +8,7 @@ from domain.agent_base import AgentBase
 from domain.context.context import ContextEngine
 from infra.LLM.LLM_infra import LLM_Client
 from infra.db.mongodb import DocumentStore
+from infra.context.runtime import bind_context_runtime
 
 from application.services.contexts import ContextService
 from application.services.events import EventStreamService
@@ -25,6 +26,7 @@ class APIExecutorAgent(AgentBase):
 
 ## 目标
 根据用户需求，自主决定调用组合合适的工具完成任务。
+遇到需求、设计选择或外部副作用边界的重要歧义，先用 ask_user 向用户澄清，不要自行猜测。
 
 ## 输出格式
 用 JSON 严格按以下格式回复：
@@ -319,6 +321,8 @@ class AgentFactoryService:
         if agent_kind != "native":
             raise ValueError(f"不支持的 Agent 类型: {agent_kind}；当前仅支持 native")
         llm = self._build_llm(record)
+        if isinstance(llm, StreamingObservableLLMClient):
+            llm.context_engine = engine
         if record.get("agent_type") == "planner":
             agent = PlanAgent(
                 id=record["agent_id"],
@@ -340,6 +344,11 @@ class AgentFactoryService:
         description = metadata.get("description")
         if description:
             agent.inject_attribute(description=description)
+        async def publish(name, payload):
+            await self._events.publish_context_event(llm._run_id(), name, payload)
+        bind_context_runtime(agent, publish=publish if getattr(self, '_events', None) is not None else None)
+        if isinstance(llm, StreamingObservableLLMClient):
+            llm.agent = agent
         return agent
 
     def _build_llm(self, record: dict[str, Any]):
@@ -351,6 +360,7 @@ class AgentFactoryService:
             agent_id=record["agent_id"],
             agent_name=record["name"],
             agent_type=record.get("agent_type", "executor"),
+            context_id=record.get('context_id', ''),
         )
 
     @staticmethod

@@ -281,7 +281,7 @@ class SystemTool():
 
 async def run_shell(command, *, cwd, env=None, timeout=30):
     process = await asyncio.create_subprocess_shell(
-        command, cwd=cwd, env=env, stdout=asyncio.subprocess.PIPE,
+        command, cwd=cwd, env=dict(env) if env is not None else None, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE, start_new_session=True,
     )
     output = asyncio.create_task(process.communicate())

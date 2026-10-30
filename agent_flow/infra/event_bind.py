@@ -8,6 +8,11 @@ from infra.eventbus import EventBus
 
 CallBack = Callable[[Event,Callable], Any]
 
+
+class ToolResultDeliveryError(RuntimeError):
+    """A returned event could not be delivered; do not execute the tool again."""
+
+
 class On_bind():
 
     _instance = None
@@ -23,6 +28,17 @@ class On_bind():
         self._bus = EventBus()
         self.__class__._instance_bool = True
 
+    async def _publish_returned_event(self, event: Event) -> None:
+        try:
+            results = await self._bus.publish(event)
+            for result in results:
+                if isinstance(result, Exception):
+                    raise result
+        except ToolResultDeliveryError:
+            raise
+        except Exception as exc:
+            raise ToolResultDeliveryError(f'事件结果回灌失败: {event.name}: {exc}') from exc
+
     # 单事件匹配
     def on(self,event:Event):
         def decorator(fn):
@@ -37,7 +53,7 @@ class On_bind():
 
                 result = await fn(*args, **new_kwargs) if is_coro else fn(*args, **new_kwargs)
                 if isinstance(result, Event):
-                    await self._bus.publish(result)
+                    await self._publish_returned_event(result)
                 return result
             
             self._bus.subscribe(event.name, wrapper)
@@ -53,7 +69,7 @@ class On_bind():
                 new_kwargs = {**event.unpack(),  "_event": event,**kwargs}
                 result = await fn(*args, **new_kwargs) if is_coro else fn(*args, **new_kwargs)
                 if isinstance(result, Event):
-                    await self._bus.publish(result)
+                    await self._publish_returned_event(result)
                 return result
 
             self._bus.register_pattern(pattern, wrapper)

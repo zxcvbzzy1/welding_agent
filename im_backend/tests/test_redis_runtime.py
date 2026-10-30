@@ -192,25 +192,34 @@ async def test_approval_shared_idempotent_and_cancelled(runtime):
 
 
 @pytest.mark.asyncio
-async def test_orphans_do_not_cancel_other_workers_or_unstarted_runs(runtime):
+async def test_orphans_do_not_cancel_other_workers_or_unstarted_runs(runtime, monkeypatch):
     lost = RedisRuntime(url=runtime.url, prefix=runtime.prefix)
     await lost.claim('orchestration', 'lost', {'run_id': 'lost'})
     await runtime.claim('orchestration', 'alive', {'run_id': 'alive'})
     await runtime.put_state('orchestration', 'pending', {'run_id': 'pending', 'status': 'pending', 'owner_worker': ''})
     await lost.redis.delete(lost.key('worker:' + lost.worker_id))
+    clock = [1000]
+    async def now():
+        return clock[0], 0
+    monkeypatch.setattr(runtime.redis, 'time', now)
     async def handle(state):
-        await runtime.put_state(state['kind'], state['target_id'], {'status': 'cancelled'})
+        await runtime.put_state(state['kind'], state['target_id'], {'status': 'failed'})
     runtime.on_orphan = handle
     await runtime.reap_orphans()
-    assert (await runtime.get_state('orchestration', 'lost'))['status'] == 'cancelled'
+    assert (await runtime.get_state('orchestration', 'lost'))['status'] == 'running'
+    for delay in (5, 10, 20, 40, 80):
+        clock[0] += delay
+        await runtime.reap_orphans()
+    assert (await runtime.get_state('orchestration', 'lost'))['status'] == 'failed'
     assert (await runtime.get_state('orchestration', 'alive'))['status'] == 'running'
     assert (await runtime.get_state('orchestration', 'pending'))['status'] == 'pending'
     await lost.redis.aclose()
 
 
 async def child(runtime, program):
+    repo_root = Path(__file__).resolve().parents[2]
     env = {**os.environ, 'REDIS_URL': runtime.url, 'REDIS_KEY_PREFIX': runtime.prefix,
-           'PYTHONPATH': str(Path(__file__).resolve().parents[2] / 'agent_flow')}
+           'PYTHONPATH': os.pathsep.join((str(repo_root), str(repo_root / 'agent_flow')))}
     return await asyncio.create_subprocess_exec(sys.executable, '-u', '-c', program,
         env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
 

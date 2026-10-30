@@ -14,6 +14,7 @@ from domain.run_context import current_run_id, current_execution_id
 from domain.memory.long.models import MemoryScope
 from infra.db.mongodb import DocumentStore
 from infra.runtime.control import ExecutionRevoked, ensure_execution_active
+from infra.context.runtime import clarify_invalid_replan
 
 from application.services.agents import AgentFactoryService
 from application.services.contexts import ContextService
@@ -415,6 +416,7 @@ class RunOrchestrationService:
             run_id=run_id,
             streams=self._streams,
             states=self.states,
+            on_invalid_replan=clarify_invalid_replan,
         )
         await orchestrator.start(record["prompt"])
         await self._update_run(run_id, {

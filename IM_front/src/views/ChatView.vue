@@ -66,6 +66,8 @@ import HumanQuestionCard from '@/components/HumanQuestionCard.vue'
 import { useChatFiles } from '@/composables/useChatFiles'
 import { useChatRunSettings } from '@/composables/useChatRunSettings'
 import { mergeToolGroupSelection } from '@/utils/toolSelection'
+import ContextUsage from '@/components/ContextUsage.vue'
+import { useContextUsage } from '@/composables/useContextUsage'
 import { useComposerPlan } from '@/composables/useComposerPlan'
 import { renderMarkdown, looksLikeMarkdownDoc } from '@/utils/markdown'
 import { createUUID } from '@/utils/uuid'
@@ -106,7 +108,8 @@ const extensionEvents = {
   'save-workdir': runSettings.saveWorkdir, 'import-drop': runSettings.importDrop,
   'import-files': runSettings.importFiles, 'cancel-import': runSettings.cancelImport,
 }
-const { plan: currentPlan, retry: retryPlan } = useComposerPlan(im)
+const { run: composerRun, plan: currentPlan, retry: retryPlan } = useComposerPlan(im)
+const contextUsage = useContextUsage(im, composerRun)
 const composerPlan = computed(() => currentPlan.value ? {
   ...currentPlan.value,
   steps: currentPlan.value.steps.map(step => ({ ...step, executor_name: agentName(step.executor_id) })),
@@ -1947,9 +1950,12 @@ onUnmounted(() => {
             </a-tooltip>
           </div>
           <div class="composer-actions">
-            <ComposerExtensions v-bind="extensionSettings" v-on="extensionEvents" :items="currentDraft.items" :target-key="draftKey" :active="!composerExpanded"
-              :disabled="sending || (!im.currentAgentId && !im.currentRoom)"
-              @upload="chatFiles.uploadFiles" @reuse="chatFiles.addExisting" @remove="chatFiles.removeItem" @retry="chatFiles.retry" />
+            <div class="composer-action-tools">
+              <ComposerExtensions v-bind="extensionSettings" v-on="extensionEvents" :items="currentDraft.items" :target-key="draftKey" :active="!composerExpanded"
+                :disabled="sending || (!im.currentAgentId && !im.currentRoom)"
+                @upload="chatFiles.uploadFiles" @reuse="chatFiles.addExisting" @remove="chatFiles.removeItem" @retry="chatFiles.retry" />
+              <ContextUsage :items="contextUsage.items.value" :loading="contextUsage.loading.value" :scope-key="`${draftKey}:${composerRun?.runId || ''}`" @refresh="contextUsage.refresh().catch(() => {})" />
+            </div>
             <a-button type="primary" :loading="sending" :disabled="chatFiles.busy.value || runSettings.memorySaving.value || runSettings.workspaceBusy.value" @click="send">
               <template #icon><SendOutlined /></template>
               发送
@@ -2364,9 +2370,12 @@ onUnmounted(() => {
         />
       </div>
       <div class="composer-expand-foot">
-        <ComposerExtensions v-bind="extensionSettings" v-on="extensionEvents" :items="currentDraft.items" :target-key="draftKey" :active="composerExpanded"
-          :disabled="sending || (!im.currentAgentId && !im.currentRoom)"
-          @upload="chatFiles.uploadFiles" @reuse="chatFiles.addExisting" @remove="chatFiles.removeItem" @retry="chatFiles.retry" />
+        <div class="composer-expand-tools">
+          <ComposerExtensions v-bind="extensionSettings" v-on="extensionEvents" :items="currentDraft.items" :target-key="draftKey" :active="composerExpanded"
+            :disabled="sending || (!im.currentAgentId && !im.currentRoom)"
+            @upload="chatFiles.uploadFiles" @reuse="chatFiles.addExisting" @remove="chatFiles.removeItem" @retry="chatFiles.retry" />
+          <ContextUsage :items="contextUsage.items.value" :loading="contextUsage.loading.value" :scope-key="`${draftKey}:${composerRun?.runId || ''}`" @refresh="contextUsage.refresh().catch(() => {})" />
+        </div>
         <span class="composer-expand-hint">Ctrl / ⌘ + Enter 发送</span>
         <a-space>
           <a-button @click="composerExpanded = false">取消</a-button>
@@ -2507,6 +2516,8 @@ onUnmounted(() => {
 
 .composer-actions { flex-direction: row; align-items: center; }
 .composer-expand-foot { gap: 12px; }
+.composer-action-tools,
+.composer-expand-tools { display: flex; align-items: center; gap: 8px; min-width: 0; }
 @media (max-width: 640px) {
   .composer-dock { max-width: none; }
   .composer-expand-hint { display: none; }

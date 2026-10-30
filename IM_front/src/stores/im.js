@@ -67,6 +67,7 @@ export const useIMStore = defineStore('im', {
     source: null,
     streamPath: '',
     streamStatus: 'closed',
+    streamReadyRevision: 0,
     selectionRevision: 0,
     tools: [],
     // 待处理的人工确认（危险命令）：{confirmation_id, run_id, tool_name, arguments, ...}
@@ -790,6 +791,7 @@ export const useIMStore = defineStore('im', {
         if (this.source !== source) return
         syncing = false
         this.streamStatus = 'connected'
+        this.streamReadyRevision++
         await this.refreshMessages().catch(() => {})
         if (this.source !== source) return
         if (this.currentRoom?.type === 'group') await this.fetchTasks().catch(() => {})

@@ -2,12 +2,16 @@ from im_backend.infra.agent_flow_bridge.pathing import ensure_agent_flow_path
 
 ensure_agent_flow_path()
 
-from domain.agent.plan.planAgent import PlanAgent # type: ignore  # noqa: E402
-from domain.agent.plan.providers import * # type: ignore  # noqa: E402
+from domain.agent.plan.planAgent import PlanAgent  # type: ignore  # noqa: E402
 from domain.agent_base import AgentBase  # type: ignore  # noqa: E402
 from domain.context.context import ContextEngine  # type: ignore  # noqa: E402
-from domain.context.providers import *  # type: ignore  # noqa: E402,F403
-from domain.context.strategy import RecencyStrategy  # type: ignore  # noqa: E402
+from domain.context.providers import (  # type: ignore  # noqa: E402
+    AvailableToolsProvider, ErrorProvider, HistoryProvider, PinnedContextProvider,
+    SkillProvider, StateProvider, ToolOutputProvider, UserPromptProvider,
+)
+from domain.agent.plan.providers import AvailableExecutorsProvider, ExecutorStatusProvider, PlanObservationProvider  # type: ignore  # noqa: E402
+from domain.context.strategy import CompactHistoryStrategy, FullHistoryStrategy  # type: ignore  # noqa: E402
+from domain.memory.long.providers import MemoryDocumentProvider  # type: ignore  # noqa: E402
 from domain.memory.short.default_short_term_memory import DefaultShortTermMemory  # type: ignore  # noqa: E402
 
 nums = 1
@@ -18,7 +22,7 @@ class OperatorExecutor(AgentBase):
     def _build_agent_prompt(self) -> str:
         return f"""
 你是一个系统操作执行者，当前工作目录为：{self.work_path}
-你可以使用 bash 工具执行命令来完成任务。
+你可以使用 bash 工具执行命令来完成任务。需求、设计或外部副作用边界不清楚时，先使用 ask_user 提问。
 
 ## 输出格式
 用 JSON 严格按以下格式回复：
@@ -49,14 +53,15 @@ for i in range(nums):
   operator_memory = DefaultShortTermMemory(["tool_respond", "agent_history", "error", "skill"])
   operator_context = ContextEngine(
       providers=[
-          StateProvider(),
-          AvailableToolsProvider(["system"]),
+          AvailableToolsProvider(available_fields=["system", "human"], available_tools=["ask_user"]),
           PinnedContextProvider(),
-          UserPromptProvider(),
+          MemoryDocumentProvider(),
           SkillProvider(operator_memory),
-          ErrorProvider(operator_memory),
           HistoryProvider(operator_memory, "agent_history", FullHistoryStrategy()),
-          ToolOutputProvider(operator_memory, "tool_respond", FullHistoryStrategy() | RecencyStrategy(15)),
+          UserPromptProvider(),
+          ToolOutputProvider(operator_memory, "tool_respond", CompactHistoryStrategy()),
+          StateProvider(),
+          ErrorProvider(operator_memory),
       ],
       memory=operator_memory,
   )
@@ -74,22 +79,21 @@ plan_nums = 1
 plans =[]
 
 for i in range(plan_nums):
-   # 共享记忆：让 planner 与 executors 能看到工具反馈和历史结果。
   workflow_memory = DefaultShortTermMemory(["tool_respond", "agent_history", "error", "skill"])
-  # plan agent 上下文，提供给 planner 用于决策和编排
   planner_context = ContextEngine(
       providers=[
-          StateProvider(),
-          AvailableExecutorsProvider(),
-          AvailableToolsProvider(["system"]),
+          AvailableToolsProvider(available_tools=["ask_user"]),
           PinnedContextProvider(),
-          UserPromptProvider(),
+          MemoryDocumentProvider(),
           SkillProvider(workflow_memory),
-          ErrorProvider(workflow_memory),
+          HistoryProvider(workflow_memory, "agent_history", FullHistoryStrategy()),
+          UserPromptProvider(),
+          AvailableExecutorsProvider(),
+          ToolOutputProvider(workflow_memory, "tool_respond", CompactHistoryStrategy()),
           PlanObservationProvider(),
           ExecutorStatusProvider(),
-          HistoryProvider(workflow_memory, "agent_history", FullHistoryStrategy()),
-          ToolOutputProvider(workflow_memory, "tool_respond", FullHistoryStrategy() | RecencyStrategy(15)),
+          StateProvider(),
+          ErrorProvider(workflow_memory),
       ],
       memory=workflow_memory,
   )

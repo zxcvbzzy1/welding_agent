@@ -16,6 +16,22 @@ class ShortTermMemory(ABC):
     def __init__(self,fields:list[memory_field]):
         self.field = fields
 
+    def iter_field(self, field: memory_field) -> list[tuple[str, str]]:
+        """Compatibility fallback; implementations may preserve cross-key write order."""
+        return [(key, raw) for key in self.keys_by_field(field)
+                for index in range(1, self.count(field, key) + 1)
+                if (raw := self.get(field, key, index)) is not None]
+
+    def replace_prefix(self, field, expected, replacement) -> bool:
+        """Replace a captured prefix, retaining writes appended during preparation."""
+        current = self.iter_field(field)
+        if current[:len(expected)] != list(expected):
+            return False
+        self.clear_field(field)
+        for key, raw in [*replacement, *current[len(expected):]]:
+            self.store(field, key, raw)
+        return True
+
 
     @abstractmethod
     async def store(self,fields:memory_field, key: str, raw: str) -> int:

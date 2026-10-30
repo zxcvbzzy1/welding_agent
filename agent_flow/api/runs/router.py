@@ -19,6 +19,14 @@ from application.services.runs import RunOrchestrationService
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 
+@router.get('/{run_id}/context-usage')
+async def run_context_usage(run_id: str, service: EventStreamService = Depends(get_event_service)):
+    try:
+        return {'items': await service.context_usage(run_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("")
 async def list_runs(service: RunOrchestrationService = Depends(get_run_service)):
     return {"items": await service.list_runs()}

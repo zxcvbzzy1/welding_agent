@@ -23,6 +23,7 @@ from im_backend.infra.agent_flow_bridge.pathing import ensure_agent_flow_path
 from domain.event import Event
 from domain.state import Plan
 from domain.run_context import current_run_id
+from infra.runtime.control import ExecutionRevoked
 
 ensure_agent_flow_path()
 
@@ -445,7 +446,8 @@ async def test_regeneration_separates_attempts_and_cleanup_removes_all(backend, 
     assert first != second and first != cid and first != mid
     await wait_finished(container.bridge.runtime, 'dm_reply', second)
     # Simulate an old completion arriving after regeneration.
-    await container.bridge.runs.states.update(first, {'status': 'failed'})
+    with pytest.raises(ExecutionRevoked):
+        await container.bridge.runs.states.update(first, {'status': 'failed'})
     assert container.store.find_one('im_messages', {'message_id': mid})['status'] == 'finished'
     assert (await container.bridge.events.list_events(first))[0]['execution_id'] != (await container.bridge.events.list_events(second))[0]['execution_id']
     deleted = await client.delete(f'/api/im/conversations/{cid}', headers=headers)

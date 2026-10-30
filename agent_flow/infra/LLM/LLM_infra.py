@@ -24,15 +24,33 @@ class LLM_Model_Provider(Enum):
     DEEPSEEK = "DEEPSEEK_API"
     MINMAX = "MINIMAX_API"
 
+    @property
+    def context_window(self):
+        return PROVIDER_CONTEXT_WINDOWS[self]
+
+
+# Reference-model defaults, checked 2026-10-29; not universal provider limits.
+# https://huggingface.co/zai-org/GLM-5/raw/main/config.json
+# https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/raw/main/config.json
+# https://huggingface.co/MiniMaxAI/MiniMax-M2.7/raw/main/config.json
+PROVIDER_CONTEXT_WINDOWS = {
+    LLM_Model_Provider.GLM: 202752,
+    LLM_Model_Provider.DEEPSEEK: 1048576,
+    LLM_Model_Provider.MINMAX: 204800,
+}
+
 
 
 class LLM_Client:
-    def __init__(self,url:str,model_class:str,model_provider:LLM_Model_Provider,max_tokens:int):
+    def __init__(self,url:str,model_class:str,model_provider:LLM_Model_Provider,max_tokens:int, *, context_window: int | None = None):
         self.url = url
         self.model_provider = model_provider
         self._client: AsyncOpenAI | None = None
         self.model = model_class
         self.max_tokens =max_tokens
+        self.context_window = model_provider.context_window if context_window is None else context_window
+        if self.context_window <= 0:
+            raise ValueError('context_window 必须为正数')
 
     def _api_key(self) -> str:
         key = os.getenv(self.model_provider.value, "").strip()
@@ -56,11 +74,11 @@ class LLM_Client:
         async for delta in self.stream_chat(messages, model=model):
             yield delta
 
-    async def stream_chat(self, messages: list, model: str | None = None):
+    async def stream_chat(self, messages: list, model: str | None = None, *, max_tokens: int | None = None):
         stream = await self.client.chat.completions.create(
             model=model or self.model,
             messages=messages,
-            max_tokens=self.max_tokens,
+            max_tokens=self.max_tokens if max_tokens is None else max_tokens,
             stream=True,
             extra_body={"reasoning_split": True},
             # response_format={
@@ -73,9 +91,9 @@ class LLM_Client:
             if delta:
                 yield delta
     
-    async def chat(self, messages: list):
+    async def chat(self, messages: list, *, max_tokens: int | None = None, purpose: str = ""):
         full_response = ""
-        async for delta in self.stream_chat(messages, model=self.model):
+        async for delta in self.stream_chat(messages, model=self.model, max_tokens=max_tokens):
             print(delta, end="", flush=True)
             full_response += delta
         return full_response

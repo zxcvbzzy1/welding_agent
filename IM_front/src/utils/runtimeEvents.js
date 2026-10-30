@@ -63,6 +63,7 @@ export function artifactIdentity(artifact = {}) {
 }
 
 export const sseEventNames = [
+  'context.usage.updated', 'context.compaction.started', 'context.compaction.finished', 'context.compaction.failed',
   'agent.execution.started', 'agent.execution.finished', 'agent.execution.failed', 'agent.execution.cancelled',
   'plan.generated', 'plan.replanned', 'task.updated', 'plan.step.started',
   'room.created',

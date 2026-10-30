@@ -16,13 +16,12 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-# 工具反馈：完整历史 + 仅保留最近 15 条（对齐 static_agents.py 的
-# ``FullHistoryStrategy() | RecencyStrategy(15)``）。
-_TOOL_OUTPUT_STRATEGY = {"pipeline": [{"type": "full_history"}, {"type": "recency", "keep_last": 35}]}
-# 对话历史：完整历史（对齐 ``FullHistoryStrategy()``）。
+# 工具反馈：达到 100 条时归纳历史，并完整保留最新 10 条原文。
+_TOOL_OUTPUT_STRATEGY = {"pipeline": [{"type": "compact_history", "threshold": 100, "keep_recent": 10}]}
+# 对话历史沿用原有最近 35 条规则。
 _HISTORY_STRATEGY = {"pipeline": [{"type": "full_history"}, {"type": "recency", "keep_last": 35}]}
-# 新建 Agent 默认只放开系统类工具，与 static_agents.py 的 ``AvailableToolsProvider(["system"])`` 一致。
-DEFAULT_TOOL_FIELDS = ["system"]
+# 新建 Agent 放开系统工具与人机问答。
+DEFAULT_TOOL_FIELDS = ["system", "human"]
 
 
 def _executor_template() -> list[dict[str, Any]]:
@@ -62,7 +61,7 @@ def _planner_template() -> list[dict[str, Any]]:
         {
             "provider_id": "available_tools",
             "enabled": True,
-            "params": {"available_fields": list(DEFAULT_TOOL_FIELDS), "available_tools": []},
+            "params": {"available_fields": [], "available_tools": ["ask_user"]},
         },
         {"provider_id": "executor_status", "enabled": True, "params": {}},
         {"provider_id": "pinned_context", "enabled": True, "params": {}},

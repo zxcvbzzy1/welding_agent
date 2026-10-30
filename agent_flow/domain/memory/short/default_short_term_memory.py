@@ -14,6 +14,7 @@ class DefaultShortTermMemory(ShortTermMemory):
     def __init__(self,fields:list[memory_field]) -> None:
         super().__init__(fields)
         self._store:       dict[str, dict[str, list[str]]] = {}
+        self._order: dict[str, list[tuple[str, str]]] = {}
 
 
     # ── 写 ────────────────────────────────────────────────────────
@@ -23,7 +24,11 @@ class DefaultShortTermMemory(ShortTermMemory):
             raw = json.dumps(raw, ensure_ascii=False)
         values = self._store.setdefault(field, {}).setdefault(key, [])
         values.append(raw)
+        self._order.setdefault(field, []).append((key, raw))
         return len(values)
+
+    def iter_field(self, field) -> list[tuple[str, str]]:
+        return list(self._order.get(field, []))
 
     # ── 读 ────────────────────────────────────────────────────────
 
@@ -59,14 +64,17 @@ class DefaultShortTermMemory(ShortTermMemory):
 
     def clear(self) -> None:
         self._store.clear()
+        self._order.clear()
 
     def clear_field(self, field: memory_field) -> None:
         self._store.pop(field, None)
+        self._order.pop(field, None)
 
     def delete_key(self, field: memory_field, key: str) -> None:
         keys = self._store.get(field)
         if keys is None:
             return
         keys.pop(key, None)
+        self._order[field] = [(name, raw) for name, raw in self._order.get(field, []) if name != key]
         if not keys:
             self._store.pop(field, None)

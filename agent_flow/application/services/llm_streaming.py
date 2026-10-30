@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+import time
+import uuid
 from typing import Any
 
 from domain.runtime_hooks import get_run_context_provider
+from domain.run_context import current_execution_id
 from infra.runtime.control import ensure_execution_active
 from domain.json_parse import robust_json_load
 from application.services.events import EventStreamService
+from domain.memory.long.chunking import EstimatedTokenCounter
 
 
 class StreamingObservableLLMClient:
@@ -19,6 +26,8 @@ class StreamingObservableLLMClient:
         agent_id: str,
         agent_name: str,
         agent_type: str,
+        context_engine=None,
+        context_id: str = '',
     ) -> None:
         self._base = base_llm
         self._streams = streams
@@ -27,13 +36,41 @@ class StreamingObservableLLMClient:
         self.agent_type = agent_type
         self.model = getattr(base_llm, "model", "")
         self.max_tokens = getattr(base_llm, "max_tokens", None)
+        self.context_window = getattr(base_llm, 'context_window', None)
+        self.context_engine, self.context_id = context_engine, context_id
+        self.agent = None
 
-    async def chat(self, messages: list) -> str:
+    async def chat(self, messages: list, *, max_tokens=None, purpose='') -> str:
         await ensure_execution_active()
-        call_role = self._detect_call_role(messages)
+        call_role = purpose or self._detect_call_role(messages)
         run_id = self._run_id()
         sequence = 0
         full_response = ""
+
+        if self.context_engine is not None and not purpose:
+            messages = [dict(message) for message in messages]
+            usage = self.context_snapshot(messages, call_role)
+            while self.context_window and usage['input_tokens'] > self.context_window:
+                if self.agent is None:
+                    raise ValueError('输入超过上下文容量')
+                from infra.context.runtime import request_agent_question
+                result = await request_agent_question(self.agent, [{
+                    'question': '当前输入超过模型上下文容量，是否重试压缩？压缩失败的原始反馈仍然保留。',
+                    'type': 'single', 'options': ['重试压缩', '取消本次任务'],
+                }])
+                if result['answers'][0].get('selected_option_ids') != ['o1']:
+                    raise asyncio.CancelledError('context_capacity_cancelled')
+                previous = self.context_engine.last_text
+                await self.context_engine.prepare(self.context_engine.last_state)
+                refreshed = self.context_engine.refresh_tool_sections()
+                for message in messages:
+                    if message.get('role') == 'user' and message.get('content') == previous:
+                        message['content'] = refreshed
+                usage = self.context_snapshot(messages, call_role)
+            if run_id:
+                await self._streams.publish_context_event(run_id, 'context.usage.updated', usage)
+            logging.getLogger(__name__).info('Model context agent=%s context=%s phase=%s tools=%s input_tokens=%s',
+                self.agent_id, self.context_id, call_role, usage['available_tool_names'], usage['input_tokens'])
 
         if run_id:
             await self._publish(
@@ -45,7 +82,10 @@ class StreamingObservableLLMClient:
                 },
             )
 
-        async for delta in self._base.stream_chat(messages, model=self.model):
+        options = {'model': self.model}
+        if max_tokens is not None:
+            options['max_tokens'] = max_tokens
+        async for delta in self._base.stream_chat(messages, **options):
             print(delta, end="", flush=True)
             full_response += delta
             sequence += 1
@@ -70,11 +110,46 @@ class StreamingObservableLLMClient:
                     "token_chunks": sequence,
                 },
             )
-            await self._publish_structured(run_id, call_role, full_response)
+            if not purpose:
+                await self._publish_structured(run_id, call_role, full_response)
 
         return full_response
 
+    def context_snapshot(self, messages, phase):
+        counter = EstimatedTokenCounter()
+        components, tools = [], []
+        for message_index, message in enumerate(messages):
+            content = str(message.get('content', ''))
+            if (self.context_engine is not None and message.get('role') == 'user' and
+                    content == self.context_engine.last_text):
+                prefix = ''
+                for index, section in enumerate(self.context_engine.last_sections):
+                    updated = '\n\n'.join(filter(None, [prefix, section['text']]))
+                    components.append({'id': f'{message_index}:{index}', 'name': section['name'],
+                                       'tokens': counter.count(updated) - counter.count(prefix)})
+                    prefix = updated
+                    if section['name'] == 'available_tools':
+                        tools.extend(section['tool_names'])
+            else:
+                components.append({'id': str(message_index), 'name': 'system_prompt' if message.get('role') == 'system'
+                    else 'other_input', 'tokens': counter.count(content)})
+        # Count one canonical representation of the actual messages, including
+        # role/content keys and escaping; allocate remaining cost to formatting.
+        # Provider-specific chat templates remain an estimate, not billing usage.
+        serialized = json.dumps(messages, ensure_ascii=False, separators=(',', ':'))
+        total = counter.count(serialized)
+        components.append({'id': 'message_format', 'name': 'message_format',
+                           'tokens': total - sum(c['tokens'] for c in components)})
+        return {'call_id': str(uuid.uuid4()), 'execution_id': current_execution_id.get(),
+                'agent_id': self.agent_id, 'agent_name': self.agent_name, 'agent_type': self.agent_type,
+                'context_id': self.context_id, 'model': self.model, 'phase': phase, 'created_at': time.time(),
+                'context_window': self.context_window, 'input_tokens': sum(c['tokens'] for c in components),
+                'components': components, 'count_method': counter.name, 'available_tool_names': sorted(set(tools)),
+                'estimated': True}
+
     def _run_id(self) -> str:
+        if self._streams is None:
+            return ''
         provider = get_run_context_provider()
         if provider is None:
             return ""

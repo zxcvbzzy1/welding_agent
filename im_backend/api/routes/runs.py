@@ -25,6 +25,18 @@ class QuestionAnswerRequest(BaseModel):
     file_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
+@router.get('/runs/{run_id}/context-usage')
+async def run_context_usage(run_id: str, service: IMService = Depends(get_im_service),
+                            current_user: dict = Depends(get_current_user)):
+    try:
+        _, source = await service._question_source(run_id)
+        if source['sender_id'] != current_user['user_id']:
+            raise HTTPException(status_code=403, detail='只能查看自己发起的运行上下文')
+        return {'items': await service._bridge.events.context_usage(run_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/runs/active")
 async def list_active_runs(
     service: IMService = Depends(get_im_service),

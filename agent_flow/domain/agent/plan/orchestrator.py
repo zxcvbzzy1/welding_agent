@@ -63,12 +63,14 @@ class PlanOrchestrator:
         event_bus: EventBusPort | None = None,
         state: OrchestratorState | None = None,
         max_replan_rounds: int = 5,
+        on_invalid_replan=None,
     ) -> None:
         self.planner = planner
         self.executors = executors
         self.step_context_engine = step_context_engine
         self.event_bus = event_bus
         self.max_replan_rounds = max_replan_rounds
+        self.on_invalid_replan = on_invalid_replan
         self._replan_rounds = 0
         # 避免可变默认参数跨实例共享：未显式传入时每个 orchestrator 独立构造 OrchestratorState。
         self.state = state if state is not None else OrchestratorState()
@@ -278,11 +280,33 @@ class PlanOrchestrator:
             return False
 
         self._replan_rounds += 1
-        decision = await self._invoke_agent(
-            self.planner, "replan_after_observation", plan,
-            self.state.to_context_dict(),
-        )
-        action = decision.get("action", "continue")
+        attempts = 0
+        while True:
+            decision = await self._invoke_agent(
+                self.planner, "replan_after_observation", plan, self.state.to_context_dict(),
+            )
+            try:
+                if not isinstance(decision, dict):
+                    raise ValueError('重规划必须返回 JSON 对象')
+                action = decision.get("action", "continue")
+                if not isinstance(action, str) or action not in {"continue", "finish", "replan"}:
+                    raise ValueError(f"未知重规划动作: {action}")
+                if action == "replan":
+                    self._apply_replan_steps(plan, decision.get("steps", []))
+                break
+            except ValueError as exc:
+                attempts += 1
+                error = str(exc)
+                self.planner.context_engine.get_memory().store('error', 'replan_validation',
+                    f"重规划未生效，原计划保持不变。请修正候选依赖图：{error}")
+                await self._publish_event('plan.replan.rejected', {
+                    'planner_id': self.planner.id, 'attempt': attempts, 'error': error})
+                if attempts >= 3:
+                    if self.on_invalid_replan is None:
+                        raise ValueError(f"重规划连续三次无效，且没有人工澄清回调：{error}") from exc
+                    if await self.on_invalid_replan(self.planner, plan, error) == 'continue':
+                        return False
+                    attempts = 0
 
         if action == "finish":
             for step in plan.steps:
@@ -297,7 +321,6 @@ class PlanOrchestrator:
             return True
 
         if action == "replan":
-            self._apply_replan_steps(plan, decision.get("steps", []))
             await self._dispatch({
                 "event_dispatch": "plan.replanned",
                 "playload": {"plan": plan},
@@ -337,5 +360,46 @@ class PlanOrchestrator:
             step for step in plan.steps
             if step.status != "pending"
         ]
+        if not isinstance(raw_steps, list) or any(not isinstance(row, dict) for row in raw_steps):
+            raise ValueError("steps 必须是步骤对象数组")
+        history = {step.step_id: step for step in history_steps}
+        identifiers = []
+        for row in raw_steps:
+            identifier = row.get('step_id')
+            if not isinstance(identifier, str) or not identifier.strip():
+                raise ValueError('每个新步骤必须包含非空字符串 step_id')
+            if identifier in history or identifier in identifiers:
+                raise ValueError(f'步骤 ID 重复或覆盖历史步骤: {identifier}')
+            if not isinstance(row.get('title'), str) or not row['title'].strip():
+                raise ValueError(f'步骤 {identifier} 缺少 title')
+            if not isinstance(row.get('executor_id'), str) or row['executor_id'] not in self.executors:
+                raise ValueError(f"步骤 {identifier} 的执行者不存在: {row.get('executor_id')}")
+            if row.get('status', 'pending') != 'pending':
+                raise ValueError(f'新步骤 {identifier} 必须为 pending')
+            dependencies = row.get('depends_on', [])
+            if not isinstance(dependencies, list) or any(not isinstance(dep, str) for dep in dependencies):
+                raise ValueError(f'步骤 {identifier} 的 depends_on 必须是字符串数组')
+            if len(set(dependencies)) != len(dependencies):
+                raise ValueError(f'步骤 {identifier} 包含重复依赖')
+            identifiers.append(identifier)
+        candidates = set(identifiers)
+        pending_dependencies = {}
+        for row in raw_steps:
+            identifier, dependencies = row['step_id'], row.get('depends_on', [])
+            if identifier in dependencies:
+                raise ValueError(f'步骤 {identifier} 不能依赖自身')
+            missing = [dep for dep in dependencies if dep not in candidates and dep not in history]
+            if missing:
+                raise ValueError(f'步骤 {identifier} 依赖不存在或已被替换: {missing}；只引用保留历史或本次新步骤')
+            blocked = [dep for dep in dependencies if dep in history and history[dep].status in {'failed', 'skipped'}]
+            if blocked:
+                raise ValueError(f'步骤 {identifier} 依赖不可执行的历史步骤: {blocked}')
+            pending_dependencies[identifier] = set(dependencies) & candidates
+        remaining = dict(pending_dependencies)
+        while remaining:
+            ready = {identifier for identifier, deps in remaining.items() if not deps}
+            if not ready:
+                raise ValueError(f'候选计划包含循环依赖: {sorted(remaining)}')
+            remaining = {identifier: deps - ready for identifier, deps in remaining.items() if identifier not in ready}
         replacement = _dict_to_plan({"steps": raw_steps})
         plan.steps = history_steps + replacement.steps

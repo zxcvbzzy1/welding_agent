@@ -5,11 +5,10 @@ from domain.agent.plan.providers import AvailableExecutorsProvider, ExecutorStat
 from domain.context.context import ContextEngine
 from domain.context.providers import *
 from domain.memory.long.providers import MemoryDocumentProvider
-from domain.context.strategy import FullHistoryStrategy, LatestOnlyStrategy, RecencyStrategy, TokenBudgetStrategy
+from domain.context.strategy import FullHistoryStrategy, LatestOnlyStrategy, RecencyStrategy, TokenBudgetStrategy, CompactHistoryStrategy
 from domain.event import ToolEventFactory
 from domain.memory.short.default_short_term_memory import DefaultShortTermMemory
 from infra.LLM.LLM_infra import LLM_Client, LLM_Model_Provider
-from infra.context.db_strategy import ChunkToFileStrategy
 from infra.eventbus import EventBus
 
 
@@ -29,43 +28,70 @@ llm_client = LLM_Client(
 )
 
 
-# 个性化设置
-# 记忆
-memory = DefaultShortTermMemory(["tool_respond", "agent_history", "error"])
-memory2 = DefaultShortTermMemory(["tool_respond", "agent_history", "error"])
+# 以下是独立智能体的手动组装示例，直接修改列表即可调整上下文。
+# 每个智能体单独创建 memory，避免共享工具反馈和对话历史。
+# 这里不连接数据库、不创建 IM 容器，也不启动后台任务。
+memory = DefaultShortTermMemory(["tool_respond", "agent_history", "error", "skill"])
+memory2 = DefaultShortTermMemory(["tool_respond", "agent_history", "error", "skill"])
 
-# ReACT执行者上下文提供类
+# ReACT 执行者：稳定的工具定义在前，运行状态和一次性错误在后。
 providers = [
-    UserPromptProvider(),
+    AvailableToolsProvider(
+        available_fields=["system", "search", "memory", "write_agent", "human"],
+        available_tools=["ask_user"],
+    ),
+    PinnedContextProvider(),
     MemoryDocumentProvider(),
     StateProvider(),
     ErrorProvider(memory),
     AvailableToolsProvider(["system", "search", "memory", "write_agent", "human", "camera"]),
+    SkillProvider(memory),
     HistoryProvider(memory, "agent_history", FullHistoryStrategy()),
-    ReActToolFeedbackProvider(memory, "tool_respond", FullHistoryStrategy() | RecencyStrategy(10) | ChunkToFileStrategy("./mid",4000,4000)),
-]
-
-# PlanAgent编排上下文提供类
-plan_providers = [
-    AvailableToolsProvider(available_tools=["ask_user"]),
     UserPromptProvider(),
-    MemoryDocumentProvider(),
+    ReActToolFeedbackProvider(
+        memory,
+        "tool_respond",
+        CompactHistoryStrategy(threshold=100, keep_recent=10),
+    ),
     StateProvider(),
-    ErrorProvider(memory2),
-    AvailableExecutorsProvider(),
-    ExecutorStatusProvider(),
-    PlanObservationProvider(),
-    HistoryProvider(memory2, "agent_history", FullHistoryStrategy()),
-    ReActToolFeedbackProvider(memory2, "tool_respond", FullHistoryStrategy() | RecencyStrategy(10) | ChunkToFileStrategy("./mid",4000,4000)),
+    ErrorProvider(memory),
 ]
 
-# ── 上下文管理类 ──────────────────────────────────────────────────
 engine = ContextEngine(
     providers=providers,
     memory=memory,
 )
 
+# Planner：独立记忆，只开放澄清工具，并显式列出计划相关 provider。
+plan_providers = [
+    AvailableToolsProvider(available_tools=["ask_user"]),
+    PinnedContextProvider(),
+    MemoryDocumentProvider(),
+    SkillProvider(memory2),
+    HistoryProvider(memory2, "agent_history", FullHistoryStrategy()),
+    UserPromptProvider(),
+    AvailableExecutorsProvider(),
+    ReActToolFeedbackProvider(
+        memory2,
+        "tool_respond",
+        CompactHistoryStrategy(threshold=100, keep_recent=10),
+    ),
+    PlanObservationProvider(),
+    ExecutorStatusProvider(),
+    StateProvider(),
+    ErrorProvider(memory2),
+]
+
 plan_engine = ContextEngine(
     providers=plan_providers,
     memory=memory2,
 )
+
+# 在自己的入口中，按顺序注册工具、创建智能体、显式启用摘要，再启动执行：
+# from infra.tool.builtin import system, ask_user
+# import infra.tool.tools_attach_methods
+# from infra.context.runtime import bind_context_runtime
+# agent = YourAgent(id="demo", name="示例智能体", llm=llm_client, context=engine)
+# bind_context_runtime(agent)  # 使用当前智能体模型生成工具反馈摘要；不启动 IM 服务。
+# await agent.start("你的任务")
+# 如果不需要摘要，把上面的 CompactHistoryStrategy() 改为 FullHistoryStrategy() 即可。

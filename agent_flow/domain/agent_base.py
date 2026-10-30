@@ -136,6 +136,7 @@ class AgentBase(ABC):
     async def _think(self) -> AgentDecision:
         """ContextEngine 构造 user message → 调用 LLM → 解析决策"""
         state    = self.states_manage.get_state()
+        await self.context_engine.prepare(state)
         context  = self.context_engine.build(state)
         messages = [
             {"role": "system", "content": self._build_agent_prompt()},

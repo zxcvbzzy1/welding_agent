@@ -1,5 +1,6 @@
 # domain/context/strategy.py
 from __future__ import annotations
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Callable
@@ -36,6 +37,10 @@ class ContextStrategy(ABC):
     def __or__(self, other: "ContextStrategy") -> "StrategyPipeline":
         return StrategyPipeline([self, other])
 
+    async def prepare(self, memory, field, state, *, summarize=None, notify=None):
+        """Optional asynchronous preparation; rendering remains synchronous."""
+        return None
+
 
 class ItemStrategy(ContextStrategy, ABC):
     """
@@ -45,14 +50,7 @@ class ItemStrategy(ContextStrategy, ABC):
 
     def apply(self, memory: ShortTermMemory, field: memory_field, state: dict) -> list[ContextItem]:
         # 单独使用时从 memory 拿指定 field 的原文再变换
-        items = [
-            ContextItem(source=f"{key}#{i+1}", content=raw, metadata={"field": field, "name": key, "tool_name": key})
-            for key in memory.keys_by_field(field)
-            for i, raw in enumerate(
-                [memory.get(field, key, j+1) for j in range(memory.count(field, key))]
-            )
-            if raw
-        ]
+        items = FullHistoryStrategy().apply(memory, field, state)
         return self.transform(items, state)
 
     @abstractmethod
@@ -84,6 +82,10 @@ class StrategyPipeline(ContextStrategy):
     def __or__(self, other: "ContextStrategy") -> "StrategyPipeline":
         return StrategyPipeline([*self._strategies, other])
 
+    async def prepare(self, memory, field, state, **callbacks):
+        for strategy in self._strategies:
+            await strategy.prepare(memory, field, state, **callbacks)
+
 
 
 
@@ -96,16 +98,66 @@ class FullHistoryStrategy(ContextStrategy):
     def apply(self, memory: ShortTermMemory, field: memory_field, state: dict) -> list[ContextItem]:
         items: list[ContextItem] = []
 
-        for key in memory.keys_by_field(field):
-            for i in range(memory.count(field, key)):
-                raw = memory.get(field, key, i + 1)
-                if raw:
-                    items.append(ContextItem(
-                        source=f"{key}#{i+1}",
-                        content=raw,
-                        metadata={"field": field, "name": key, "tool_name": key, "call_index": i + 1},
-                    ))
+        counts = {}
+        for index, (key, raw) in enumerate(memory.iter_field(field)):
+            counts[key] = counts.get(key, 0) + 1
+            if raw:
+                items.append(ContextItem(
+                    source=f"{key}#{index + 1 if field == 'tool_respond' else counts[key]}", content=raw,
+                    metadata={"field": field, "name": key, "tool_name": key, "call_index": counts[key]},
+                ))
         return items
+
+
+class CompactHistoryStrategy(FullHistoryStrategy):
+    """Summarize historical facts, retaining recent observations verbatim."""
+
+    summary_key = "__previous_tool_feedback__"
+
+    def __init__(self, threshold: int = 100, keep_recent: int = 10):
+        if threshold <= keep_recent or keep_recent < 1:
+            raise ValueError("压缩阈值必须大于保留原文的条数")
+        self.threshold, self.keep_recent = threshold, keep_recent
+
+    async def prepare(self, memory, field, state, *, summarize=None, notify=None):
+        snapshot = memory.iter_field(field)
+        if len(snapshot) < self.threshold:
+            return
+        async def emit(phase, **details):
+            if notify is not None:
+                await notify(phase, {"field": field, "before_items": len(snapshot), **details})
+        await emit("started")
+        recent = snapshot[-self.keep_recent:]
+        try:
+            if summarize is None:
+                raise RuntimeError("未配置上下文摘要回调")
+            for attempt in range(3):
+                try:
+                    summary = await summarize(snapshot[:-self.keep_recent], recent)
+                    if not isinstance(summary, str) or not summary.strip():
+                        raise ValueError("上下文摘要为空")
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(attempt + 1)
+        except Exception as exc:
+            await emit("failed", error=str(exc))
+            return
+        recent_text = "\n\n".join(f"### {name}\n{raw}" for name, raw in recent)
+        combined = ("## 先前工具反馈：重要事实、已有决策与未完成事项\n" + summary.strip() +
+                    "\n\n## 最新工具反馈原文（矛盾时以较新反馈为准）\n" + recent_text)
+        committed = memory.replace_prefix(field, snapshot, [(self.summary_key, combined)])
+        try:
+            await emit("finished" if committed else "failed", after_items=len(memory.iter_field(field)),
+                       **({} if committed else {"error": "压缩期间记忆前缀已变更，保留原文"}))
+        except BaseException:
+            if committed:
+                # A completion notification can itself pause at the runtime guard.
+                # Cancellation/revocation there must retain the original feedback;
+                # compare the prefix so a concurrent reset is never rolled back.
+                memory.replace_prefix(field, [(self.summary_key, combined)], snapshot)
+            raise
 
 
 class LatestOnlyStrategy(ContextStrategy):
