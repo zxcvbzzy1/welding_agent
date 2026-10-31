@@ -12,11 +12,28 @@ from domain.memory.long.providers import MemoryDocumentProvider
 from domain.memory.short.default_short_term_memory import DefaultShortTermMemory
 
 REACT_OUTPUT_FORMAT = """
-严格返回 JSON，不要在 JSON 外添加文字。
-执行工具时：
-{"think":"分析","tool_calls":[{"tool_name":"工具名","arguments":{},"reasoning":"调用目的"}],"is_finished":false}
-完成时：
-{"think":"结论","tool_calls":[],"is_finished":true,"finish_reason":"完成原因","final":"最终文字结果"}
+## 输出格式
+用 JSON 严格按以下格式回复：
+{{
+  "think": "你的思考过程",
+  "tool_calls": [
+    {{
+      "tool_name": "工具名",
+      "arguments": {{"参数名": "参数值"}},
+      "reasoning": "为什么调用这个工具"
+    }}
+  ],
+  "is_finished": false
+}}
+
+## 任务完成时输出
+{{
+  "think": "...",
+  "tool_calls": [],
+  "is_finished": true,
+  "finish_reason": "完成原因",
+  "final": "最终结果(string)"
+}}
 """
 
 

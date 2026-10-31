@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import uuid
+from contextlib import suppress
 from typing import Any
 
 from domain.runtime_hooks import get_run_context_provider
@@ -47,10 +48,12 @@ class StreamingObservableLLMClient:
         run_id = self._run_id()
         sequence = 0
         full_response = ""
+        call_id = str(uuid.uuid4())
 
         if self.context_engine is not None and not purpose:
             messages = [dict(message) for message in messages]
             usage = self.context_snapshot(messages, call_role)
+            usage['call_id'] = call_id
             while self.context_window and usage['input_tokens'] > self.context_window:
                 if self.agent is None:
                     raise ValueError('输入超过上下文容量')
@@ -75,11 +78,13 @@ class StreamingObservableLLMClient:
                                 for block in message['content']
                             ]
                 usage = self.context_snapshot(messages, call_role)
+                usage['call_id'] = call_id
             if run_id:
                 await self._streams.publish_context_event(run_id, 'context.usage.updated', usage)
             logging.getLogger(__name__).info('Model context agent=%s context=%s phase=%s tools=%s input_tokens=%s',
                 self.agent_id, self.context_id, call_role, usage['available_tool_names'], usage['input_tokens'])
 
+        call_started_at = time.time()
         if run_id:
             await self._publish(
                 run_id,
@@ -87,26 +92,85 @@ class StreamingObservableLLMClient:
                 {
                     "call_role": call_role,
                     "model": self.model,
+                    "call_id": call_id,
                 },
             )
 
         options = {'model': self.model}
         if max_tokens is not None:
             options['max_tokens'] = max_tokens
-        async for delta in self._base.stream_chat(messages, **options):
-            print(delta, end="", flush=True)
-            full_response += delta
-            sequence += 1
+        statuses = asyncio.Queue()
+        status_sequence, attempt, max_attempts = 0, 1, 1
+        failed_reported = False
+
+        def report(item):
+            nonlocal status_sequence, attempt, max_attempts, failed_reported
+            attempt = item.get('attempt', attempt)
+            max_attempts = item.get('max_attempts', max_attempts)
+            failed_reported = failed_reported or item.get('status') == 'failed'
+            status_sequence += 1
             if run_id:
-                await self._sse_publish(
-                    run_id,
-                    "llm.delta",
-                    {
-                        "call_role": call_role,
-                        "delta": delta,
-                        "sequence": sequence,
-                    },
-                )
+                statuses.put_nowait({**item, 'call_id': call_id, 'call_started_at': call_started_at,
+                    'call_role': call_role, 'model': self.model, 'attempt': attempt, 'max_attempts': max_attempts,
+                    'status_sequence': status_sequence, 'terminal': item.get('terminal', item.get('status') == 'failed')})
+
+        async def publish_statuses():
+            while True:
+                item = await statuses.get()
+                if item is None:
+                    return
+                try:
+                    await self._publish(run_id, 'llm.call.updated', item)
+                except Exception:
+                    logging.getLogger(__name__).warning('Model status publication failed call=%s', call_id, exc_info=True)
+
+        publisher = asyncio.create_task(publish_statuses()) if run_id else None
+        if getattr(self._base, 'supports_gateway_progress', False) is True:
+            options.update(progress=report, call_id=call_id)
+        else:
+            report({'status': 'waiting'})
+        stream = self._base.stream_chat(messages, **options)
+        try:
+            async for delta in stream:
+                if not delta:
+                    continue
+                if not sequence:
+                    report({'status': None, 'has_output': True})
+                print(delta, end="", flush=True)
+                full_response += delta
+                sequence += 1
+                if run_id:
+                    await self._sse_publish(run_id, 'llm.delta', {
+                        'call_role': call_role, 'call_id': call_id, 'attempt': attempt,
+                        'delta': delta, 'sequence': sequence,
+                    })
+        except asyncio.CancelledError:
+            report({'status': None, 'terminal': True, 'cancelled': True})
+            raise
+        except Exception as exc:
+            if not failed_reported:
+                report({'status': 'failed', 'reason': f'模型调用异常（{type(exc).__name__}）'})
+            raise
+        else:
+            report({'status': None, 'terminal': True})
+        finally:
+            # Closing the consumer also closes any live gateway response.
+            if hasattr(stream, 'aclose'):
+                try:
+                    await stream.aclose()
+                except Exception:
+                    logging.getLogger(__name__).warning('Model stream cleanup failed call=%s', call_id, exc_info=True)
+            if publisher is not None:
+                statuses.put_nowait(None)
+                try:
+                    await asyncio.wait_for(asyncio.shield(publisher), 2)
+                except (TimeoutError, asyncio.CancelledError) as exc:
+                    publisher.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await publisher
+                    if isinstance(exc, asyncio.CancelledError) and asyncio.current_task().cancelling():
+                        raise
+                    logging.getLogger(__name__).warning('Model status delivery deferred/unavailable call=%s', call_id)
 
         if run_id:
             await self._publish(
@@ -114,7 +178,9 @@ class StreamingObservableLLMClient:
                 "llm.completed",
                 {
                     "call_role": call_role,
+                    "call_id": call_id,
                     "content": full_response,
+                    "attempt": attempt,
                     "token_chunks": sequence,
                 },
             )

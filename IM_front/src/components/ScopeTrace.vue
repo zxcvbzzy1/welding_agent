@@ -3,12 +3,14 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { LoadingOutlined, RightOutlined, StopOutlined } from '@ant-design/icons-vue'
 import { eventTitle, eventContent, eventColor, eventTone } from '@/utils/runtimeEvents'
 import { scopeTraceView } from '@/utils/scopeTraces'
+import { gatewayCallLabel } from '@/utils/gatewayStatus'
 const props = defineProps({
   trace: Object, client: Object, revision: Number,
   agentName: { type: Function, default: value => value || '智能体' },
   agentAvatar: { type: Function, default: () => '' },
   canStop: Boolean,
   nested: Boolean,
+  gatewayCalls: { type: Array, default: () => [] },
 })
 defineEmits(['stop'])
 const open = ref(false)
@@ -21,7 +23,18 @@ const state = computed(() => {
 const actorName = computed(() => view.value.execution
   ? view.value.execution.agent_name || props.agentName(view.value.execution.agent_id) : '系统流程')
 const latest = computed(() => view.value.events.at(-1))
-const title = computed(() => view.value.children.length
+const activeCalls = computed(() => props.gatewayCalls.filter(call =>
+  call.run_id === props.trace.run_id
+  && (view.value.children.length
+    || (call.execution_id || '') === (view.value.execution?.execution_id || '')),
+))
+const title = computed(() => activeCalls.value.length
+  ? activeCalls.value.map(call => {
+    const label = gatewayCallLabel(call)
+    return call.agent_id === view.value.execution?.agent_id
+      ? label : `${call.agent_name || props.agentName(call.agent_id)} · ${label}`
+  }).join('；')
+  : view.value.children.length
   ? `流程轨迹 · ${view.value.children.length} 次智能体调用`
   : latest.value ? eventTitle({ ...latest.value, agent_name: '' }) : '运行轨迹')
 const rows = computed(() => [
@@ -55,7 +68,7 @@ onUnmounted(() => { if (activeQuery) props.client.collapse(activeQuery) })
         <a-avatar class="trace-avatar" :src="agentAvatar(view.execution?.agent_id)">{{ actorName.slice(0, 1).toUpperCase() }}</a-avatar>
         <div class="trace-main">
           <strong>{{ actorName }}</strong>
-          <span>{{ title }}</span>
+          <span role="status" aria-live="polite" :title="activeCalls.map(call => call.reason).filter(Boolean).join('；')">{{ title }}</span>
         </div>
         <div class="trace-stats">
           <a-tag :color="eventColor(latest?.name)" size="small">{{ trace.event_count || view.events.length }} 个业务事件</a-tag>
@@ -77,7 +90,7 @@ onUnmounted(() => { if (activeQuery) props.client.collapse(activeQuery) })
         <div v-for="row in rows" :key="row.key" class="trace-node" :class="eventTone(row.event?.name)">
           <span class="trace-dot"></span>
           <ScopeTrace v-if="row.trace" :trace="row.trace" :client="client" :revision="revision"
-            :agent-name="agentName" :agent-avatar="agentAvatar" nested />
+            :agent-name="agentName" :agent-avatar="agentAvatar" :gateway-calls="gatewayCalls" nested />
           <div v-else class="trace-node-body">
             <button class="trace-node-head trace-event-toggle" :aria-expanded="opened.has(row.event.event_id)" @click="toggleEvent(row.event)">
               <strong>{{ eventTitle(row.event) }}</strong>

@@ -52,6 +52,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useIMStore } from '@/stores/im'
 import { imApi } from '@/api/im'
 import { executionHealthLabel } from '@/utils/executionHealth'
+import { selectGatewayCalls } from '@/utils/gatewayStatus'
 import ArtifactCard from '@/components/ArtifactCard.vue'
 import ScopeTrace from '@/components/ScopeTrace.vue'
 import { TraceClient } from '@/utils/traceClient'
@@ -319,6 +320,22 @@ const executionWarning = computed(() => executionHealthLabel(
 const canInterrupt = computed(() => {
   const task = im.currentRoom?.type === 'group' ? runningGroupTask.value : runningConversationMessage.value
   return Boolean(task) && !task.cancel_requested
+})
+
+const gatewayCalls = computed(() => {
+  const conversationId = im.currentRoom?.type === 'group'
+    ? im.currentGroupConversation?.conversation_id : im.currentConversation?.conversation_id
+  const records = [...im.messages.filter(item => item.sender_type === 'user'), ...im.tasks]
+  const visibleRuns = new Set(records.filter(item => ['pending', 'running'].includes(item.status)).map(item => item.run_id))
+  if (!visibleRuns.size) {
+    const latest = [...im.messages].filter(item => item.sender_type === 'user')
+      .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0]
+    if (latest?.run_id) visibleRuns.add(latest.run_id)
+  }
+  return selectGatewayCalls(im.events, { conversationId,
+    runIds: records.map(item => item.run_id).filter(Boolean),
+    runStatuses: Object.fromEntries(records.filter(item => item.run_id).map(item => [item.run_id, item.status])),
+  }).filter(call => visibleRuns.has(call.run_id))
 })
 
 const chatItems = computed(() => {
@@ -1837,6 +1854,7 @@ onUnmounted(() => {
 
           <ScopeTrace v-else-if="entry.kind === 'scope-trace'"
             :trace="entry.trace" :client="traceClient" :revision="traceRevision"
+            :gateway-calls="gatewayCalls"
             :agent-name="agentName" :agent-avatar="agentAvatar" :can-stop="canStopScope(entry.trace)"
             @stop="confirmInterruptScope(entry.trace)" />
 

@@ -19,6 +19,10 @@ BUSINESS_EVENTS = {
 }
 SUMMARY_FIELDS = ('event_id', 'version', 'category', 'scope_id', 'run_id', 'execution_id', 'agent_name',
                   'agent_id', 'conversation_id', 'message_id', 'name', 'created_at', 'trace')
+GATEWAY_STATUS_FIELDS = {'run_id', 'agent_id', 'agent_name', 'agent_type', 'parent_agent_id', 'temporary',
+    'call_id', 'call_role', 'call_started_at', 'model', 'status', 'status_sequence',
+    'attempt', 'max_attempts', 'retry_delay', 'elapsed_seconds', 'error_code', 'reason',
+    'terminal', 'cancelled', 'has_output'}
 
 
 def event_summary(event):
@@ -90,6 +94,8 @@ class EventStreamService:
                     name=name, payload=payload, created_at=time.time())
 
     async def publish(self, run_id, name, payload, *, event_id=None):
+        if name == 'llm.call.updated':
+            payload = {key: value for key, value in payload.items() if key in GATEWAY_STATUS_FIELDS}
         if name in BUSINESS_EVENTS:
             base = self._event(run_id, name, payload)
             event = await self.publish_scope(base['scope_id'], name, payload, context=base,
@@ -100,9 +106,12 @@ class EventStreamService:
                 event['event_id'] = event_id
             await self._broadcast('run', run_id, event, durable=True)
             # Only explicit product notifications are projected, never raw traces.
-            if name.startswith(('artifacts.', 'human.confirmation.', 'context.')):
+            if name.startswith(('artifacts.', 'human.confirmation.', 'context.')) or name == 'llm.call.updated':
                 notification = dict(payload)
                 notification.pop('arguments', None)
+                if name == 'llm.call.updated':
+                    # Product status only; never project model text/reasoning.
+                    notification = {key: value for key, value in notification.items() if key in GATEWAY_STATUS_FIELDS}
                 await self.publish_scope(event['scope_id'], name, notification, context=event, trace=False,
                     event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, event['event_id'] + ':scope')), notify=False)
         await self._notify_subscribers(event)

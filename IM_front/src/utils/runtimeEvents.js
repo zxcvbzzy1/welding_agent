@@ -63,6 +63,7 @@ export function artifactIdentity(artifact = {}) {
 }
 
 export const sseEventNames = [
+  'llm.call.updated',
   'context.usage.updated', 'context.compaction.started', 'context.compaction.finished', 'context.compaction.failed',
   'agent.execution.started', 'agent.execution.finished', 'agent.execution.failed', 'agent.execution.cancelled',
   'plan.generated', 'plan.replanned', 'task.updated', 'plan.step.started',
@@ -120,7 +121,7 @@ function streamingKey(event) {
   const run = payload.run_id || event.run_id || 'scope'
   const agent = payload.agent_id || 'agent'
   const role = payload.call_role || 'call'
-  return `${run}:${agent}:${role}`
+  return `${run}:${agent}:${role}${payload.call_id ? `:${payload.call_id}:${payload.attempt || 1}` : ''}`
 }
 
 export function compactLlmEvents(events) {
@@ -617,6 +618,7 @@ export function eventTitle(event) {
   }
   if (businessNames[event.name]) return [event.agent_name, businessNames[event.name]].filter(Boolean).join(' · ')
   if (event.name === 'llm.streaming') return '模型输出中'
+  if (event.name === 'llm.call.updated') return { waiting: '等待输出', retrying: '重试中', failed: '调用失败' }[payload.status] || '模型调用状态更新'
   if (event.name === 'llm.completed') return '模型输出完成'
   if (event.name === 'agent.think') return '思考'
   if (event.name === 'agent.tool.reasoning') return `工具决策${payload.tool_name ? ` · ${payload.tool_name}` : ''}`

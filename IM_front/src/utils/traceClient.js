@@ -98,6 +98,7 @@ export class TraceClient {
     const session = this.runs.get(event.run_id)
     const view = session?.views.get(event.event_id)
     const items = [...(session?.events.values() || [])]
+      .filter(item => item.name !== 'llm.call.updated')
       .filter(item => !event.execution_id || item.execution_id === event.execution_id)
       .sort((a, b) => a.created_at - b.created_at || a.event_id.localeCompare(b.event_id))
     return { streamError: session?.streamError, items: items.slice(0, view?.limit || 100), loading: view?.loading, error: view?.error,
